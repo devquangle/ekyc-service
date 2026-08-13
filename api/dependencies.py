@@ -1,4 +1,5 @@
-from fastapi import Request
+from typing import Any
+from fastapi import Request, HTTPException, status
 from core.ocr_engine import OcrEngine
 from core.qr_engine import QrEngine
 from core.mrz_engine import MrzEngine
@@ -9,33 +10,43 @@ from processors.card_validator import CardValidator
 from services.ekyc_orchestrator import EkycOrchestrator
 
 
+def _get_state_attr(request: Request, attr_name: str, service_name: str) -> Any:
+    instance = getattr(request.app.state, attr_name, None)
+    if instance is None:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"{service_name} is not initialized or unavailable."
+        )
+    return instance
+
+
 def get_ocr_engine(request: Request) -> OcrEngine:
-    return request.app.state.ocr_engine
+    return _get_state_attr(request, "ocr_engine", "OCR Engine")
 
 
 def get_qr_engine(request: Request) -> QrEngine:
-    return request.app.state.qr_engine
+    return _get_state_attr(request, "qr_engine", "QR Engine")
 
 
 def get_mrz_engine(request: Request) -> MrzEngine:
-    return request.app.state.mrz_engine
+    return _get_state_attr(request, "mrz_engine", "MRZ Engine")
 
 
 def get_face_engine(request: Request) -> FaceEngine:
-    return request.app.state.face_engine
+    return _get_state_attr(request, "face_engine", "Face Engine")
 
 
 def get_liveness_engine(request: Request) -> LivenessEngine:
-    return request.app.state.liveness_engine
+    return _get_state_attr(request, "liveness_engine", "Liveness Engine")
 
 
 def get_card_processor(request: Request) -> CardProcessor:
-    return request.app.state.card_processor
+    return _get_state_attr(request, "card_processor", "Card Processor")
 
 
 def get_card_validator(request: Request) -> CardValidator:
-    return request.app.state.card_validator
+    return _get_state_attr(request, "card_validator", "Card Validator")
 
 
 def get_orchestrator(request: Request) -> EkycOrchestrator:
-    return request.app.state.orchestrator
+    return _get_state_attr(request, "orchestrator", "eKYC Orchestrator")
