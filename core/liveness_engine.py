@@ -1,3 +1,4 @@
+import os
 import cv2
 import tempfile
 import numpy as np
@@ -23,37 +24,53 @@ class LivenessEngine:
         if len(video_bytes) > settings.MAX_VIDEO_SIZE_MB * 1024 * 1024:
             return False, 0.0, [], ["VIDEO_SIZE_EXCEEDED"]
 
-        # Write to temporary file for OpenCV VideoCapture
-        with tempfile.NamedTemporaryFile(suffix=".mp4", delete=True) as tmp:
+        # Safe temporary file creation for OpenCV VideoCapture on Windows (avoiding PermissionError / File Lock)
+        tmp = tempfile.NamedTemporaryFile(suffix=".mp4", delete=False)
+        tmp_path = tmp.name
+
+        sampled_frames: List[np.ndarray] = []
+        duration_exceeded = False
+        video_invalid = False
+
+        try:
             tmp.write(video_bytes)
-            tmp.flush()
+            tmp.close()  # Close file descriptor so OpenCV can safely open the file on Windows
 
-            cap = cv2.VideoCapture(tmp.name)
+            cap = cv2.VideoCapture(tmp_path)
             if not cap.isOpened():
-                return False, 0.0, [], ["VIDEO_INVALID"]
+                video_invalid = True
+            else:
+                fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+                total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+                duration_sec = total_frames / fps if fps > 0 else 0.0
 
-            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-            total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-            duration_sec = total_frames / fps
+                if duration_sec > settings.MAX_VIDEO_DURATION_SEC:
+                    duration_exceeded = True
+                else:
+                    sample_interval = max(1, int(fps / settings.VIDEO_FRAME_SAMPLING_RATE))
+                    frame_idx = 0
 
-            if duration_sec > settings.MAX_VIDEO_DURATION_SEC:
+                    while cap.isOpened():
+                        ret, frame = cap.read()
+                        if not ret:
+                            break
+                        if frame_idx % sample_interval == 0:
+                            sampled_frames.append(frame)
+                        frame_idx += 1
+
                 cap.release()
-                return False, 0.0, [], ["VIDEO_DURATION_EXCEEDED"]
+        finally:
+            if os.path.exists(tmp_path):
+                try:
+                    os.remove(tmp_path)
+                except Exception as e:
+                    logger.warning(f"Failed to remove temp video file '{tmp_path}': {str(e)}")
 
-            # Sample frames at 10 fps
-            sample_interval = max(1, int(fps / settings.VIDEO_FRAME_SAMPLING_RATE))
-            sampled_frames = []
-            frame_idx = 0
+        if video_invalid:
+            return False, 0.0, [], ["VIDEO_INVALID"]
 
-            while cap.isOpened():
-                ret, frame = cap.read()
-                if not ret:
-                    break
-                if frame_idx % sample_interval == 0:
-                    sampled_frames.append(frame)
-                frame_idx += 1
-
-            cap.release()
+        if duration_exceeded:
+            return False, 0.0, [], ["VIDEO_DURATION_EXCEEDED"]
 
         if not sampled_frames:
             return False, 0.0, [], ["VIDEO_NO_FRAMES"]
