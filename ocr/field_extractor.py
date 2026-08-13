@@ -426,7 +426,7 @@ class FieldExtractor:
         if not parsed:
             return None
 
-        match = re.search(r'\b(0[1-9]|[12]\d|3[01])[\/.\-](0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b', search_text)
+        match = re.search(r'\b([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b', search_text)
         raw_date_str = match.group(0) if match else parsed
 
         logger.info(f"[FIELD_EXTRACTOR] {field_name} raw='{raw_date_str}' iso='{parsed}'")

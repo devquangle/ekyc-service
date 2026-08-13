@@ -57,9 +57,9 @@ def parse_date(date_str: Optional[str]) -> Optional[str]:
         except ValueError:
             return None
 
-    # 2. Match DD/MM/YYYY or DD-MM-YYYY or DD.MM.YYYY
+    # 2. Match DD/MM/YYYY or D/M/YYYY or DD-MM-YYYY or DD.MM.YYYY
     dmy_match = re.search(
-        r'\b(0[1-9]|[12]\d|3[01])[\/.\-](0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b',
+        r'\b([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b',
         clean
     )
     if dmy_match:
