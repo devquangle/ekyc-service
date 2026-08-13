@@ -91,3 +91,14 @@ def test_case7_mrz_invalid_position_returns_none_no_guess():
 
     assert parsed is not None
     assert parsed["identityNumber"] is None
+
+
+def test_case8_card_expired():
+    validator = CardValidator()
+    ocr_data = ExtractedCardData(identityNumber="087204000897", fullName="HUỲNH QUANG LÊ", dateOfBirth="2004-10-04", dateOfExpiry="2020-01-01")
+
+    card_verified, cross_val_res, errors = validator.validate(ocr_data, None, None, card_type="CCCD_OLD")
+
+    assert cross_val_res.isExpired is True
+    assert card_verified is False
+    assert "CARD_EXPIRED" in errors

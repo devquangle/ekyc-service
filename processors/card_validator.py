@@ -1,5 +1,7 @@
+from datetime import datetime
 from typing import Tuple, Dict, Any, List, Optional
 from schemas.card import ExtractedCardData, CrossValidationResult, CrossValidationDetail
+from ocr.normalizer import normalize_text_for_compare
 from utils.text_utils import compare_names
 from utils.logger import logger
 from config import settings
@@ -79,7 +81,19 @@ class CardValidator:
 
         # 6. Check Expiry
         is_expired = False
+        exp_str = exp_ocr or exp_qr or exp_mrz
+        if exp_str:
+            try:
+                exp_date = datetime.strptime(exp_str, "%Y-%m-%d").date()
+                if exp_date < datetime.now().date():
+                    is_expired = True
+                    errors.append("CARD_EXPIRED")
+            except ValueError:
+                pass
+
         mrz_valid = mrz_data.get("isMrzValid", True) if mrz_data else True
+        if mrz_data and not mrz_valid:
+            errors.append("CARD_DATA_WARNING_MRZ_CHECKSUM_INVALID")
 
         cross_val_result = CrossValidationResult(
             ocrMatchQr=ocr_match_qr,
@@ -89,15 +103,18 @@ class CardValidator:
             details=details
         )
 
-        # 7. Card Verification Decision Logic
+        # 7. Card Verification Decision Logic with QR Override Support
+        has_valid_qr = (qr_data is not None and ocr_match_qr is True)
+        mrz_pass_or_qr_override = mrz_valid or has_valid_qr
+
         card_verified = (
             card_type != "UNKNOWN"
             and not is_expired
-            and mrz_valid
-            and id_ocr is not None
-            and name_ocr is not None
+            and ocr_data.identityNumber is not None
+            and ocr_data.fullName is not None
+            and mrz_pass_or_qr_override
             and ocr_match_qr is not False
-            and ocr_match_mrz is not False
+            and (has_valid_qr or ocr_match_mrz is not False)
         )
 
         return card_verified, cross_val_result, errors
@@ -107,9 +124,13 @@ class CardValidator:
         if len(vals) < 2:
             return "NOT_AVAILABLE"
 
-        for i in range(len(vals)):
-            for j in range(i + 1, len(vals)):
-                if vals[i] != vals[j]:
+        comp_keys = [normalize_text_for_compare(v).replace(" ", "") for v in vals if normalize_text_for_compare(v)]
+        if len(comp_keys) < 2:
+            return "NOT_AVAILABLE"
+
+        for i in range(len(comp_keys)):
+            for j in range(i + 1, len(comp_keys)):
+                if comp_keys[i] != comp_keys[j]:
                     return "MISMATCH"
         return "MATCH"
 
@@ -131,7 +152,11 @@ class CardValidator:
             val2 = pairs[i + 1]
             if val1 is not None and val2 is not None:
                 has_comparison = True
-                if val1 != val2 and compare_names(str(val1), str(val2)) < settings.FULLNAME_FUZZY_THRESHOLD:
+                k1 = normalize_text_for_compare(str(val1))
+                k2 = normalize_text_for_compare(str(val2))
+                if k1 and k2 and k1.replace(" ", "") == k2.replace(" ", ""):
+                    continue
+                if compare_names(str(val1), str(val2)) < settings.FULLNAME_FUZZY_THRESHOLD:
                     return False
 
         if not has_comparison:
