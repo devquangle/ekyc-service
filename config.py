@@ -5,26 +5,41 @@ from typing import List, Dict, Any
 class Settings(BaseSettings):
     APP_NAME: str = "eKYC Service"
     API_V1_STR: str = "/api/v1"
+    DEBUG: bool = True
+    DEVICE: str = "cpu"
+
     # CORS & Security Settings
     ALLOWED_ORIGINS: List[str] = ["*"]
-
 
     # OCR Settings
     OCR_LANG: str = "vi"
     OCR_USE_ANGLE_CLS: bool = True
-
-    DEBUG: bool = True
     FULLNAME_FUZZY_THRESHOLD: float = 0.80
+
+    # Face Matching Settings
+    FACE_MISMATCH_THRESHOLD: float = 0.45
+    FACE_MATCH_THRESHOLD: float = 0.60
     FACE_SIMILARITY_THRESHOLD: float = 0.60
-    IMAGE_BLUR_THRESHOLD: float = 100.0
-    LIVENESS_BLUR_THRESHOLD: float = 100.0
-    LIVENESS_EYE_RATIO_THRESHOLD: float = 0.20
-    MAX_IMAGE_SIZE_MB: int = 10
+    MIN_CARD_FACE_WIDTH: int = 30
+    MIN_CARD_FACE_HEIGHT: int = 30
+    MIN_SELFIE_FACE_WIDTH: int = 40
+    MIN_SELFIE_FACE_HEIGHT: int = 40
+    INSIGHTFACE_MODEL_NAME: str = "buffalo_l"
+    MODEL_DIR: str = "weights"
     FACE_DETECTION_MODEL_PATH: str = "weights/face_detection.onnx"
     FACE_RECOGNITION_MODEL_PATH: str = "weights/face_recognition.onnx"
 
 
-
+    # Liveness & Image Settings
+    IMAGE_BLUR_THRESHOLD: float = 100.0
+    LIVENESS_BLUR_THRESHOLD: float = 100.0
+    LIVENESS_EYE_RATIO_THRESHOLD: float = 0.20
+    LIVENESS_PASSIVE_THRESHOLD: float = 0.50
+    MAX_IMAGE_SIZE_MB: int = 10
+    MAX_VIDEO_SIZE_MB: int = 50
+    MAX_VIDEO_DURATION_SEC: float = 30.0
+    VIDEO_FRAME_SAMPLING_RATE: int = 10
+    ALLOWED_IMAGE_TYPES: List[str] = ["image/jpeg", "image/png", "image/jpg"]
 
     class Config:
         case_sensitive = True

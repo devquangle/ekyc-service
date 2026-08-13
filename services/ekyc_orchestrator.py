@@ -74,7 +74,7 @@ class EkycOrchestrator:
         self, card_portrait_bytes: bytes, selfie_bytes: bytes
     ) -> FaceVerifyResponse:
         """
-        Executes Face Verification Flow.
+        Executes Face Verification Flow using modular FaceVerificationService.
         """
         card_img = decode_image_bytes(card_portrait_bytes)
         selfie_img = decode_image_bytes(selfie_bytes)
@@ -84,43 +84,12 @@ class EkycOrchestrator:
                 faceVerified=False,
                 similarityScore=0.0,
                 threshold=settings.FACE_MATCH_THRESHOLD,
+                decision="MISMATCH",
+                margin=-settings.FACE_MATCH_THRESHOLD,
                 errors=["INVALID_IMAGE_FORMAT"]
             )
 
-        # Crop portrait from card front image
-        portrait_img = self.face_engine.crop_portrait_from_card(card_img)
-
-        emb_card, face_count_card = self.face_engine.extract_face_embedding(portrait_img)
-        emb_selfie, face_count_selfie = self.face_engine.extract_face_embedding(selfie_img)
-
-        errors = []
-        if face_count_card == 0:
-            errors.append("CARD_PORTRAIT_FACE_NOT_FOUND")
-        if face_count_selfie == 0:
-            errors.append("SELFIE_FACE_NOT_FOUND")
-        elif face_count_selfie > 1:
-            errors.append("MULTIPLE_FACES_DETECTED")
-
-        if errors or emb_card is None or emb_selfie is None:
-            return FaceVerifyResponse(
-                faceVerified=False,
-                similarityScore=0.0,
-                threshold=settings.FACE_MATCH_THRESHOLD,
-                errors=errors if errors else ["FACE_EMBEDDING_FAILED"]
-            )
-
-        similarity = self.face_engine.calculate_similarity(emb_card, emb_selfie)
-        face_verified = (similarity >= settings.FACE_MATCH_THRESHOLD) and (len(errors) == 0)
-
-        if not face_verified and "FACE_MISMATCH" not in errors:
-            errors.append("FACE_MISMATCH")
-
-        return FaceVerifyResponse(
-            faceVerified=face_verified,
-            similarityScore=round(similarity, 4),
-            threshold=settings.FACE_MATCH_THRESHOLD,
-            errors=errors
-        )
+        return self.face_engine.verify_faces(card_img, selfie_img)
 
     def detect_liveness(
         self, video_bytes: bytes, expected_gestures: Optional[List[str]] = None

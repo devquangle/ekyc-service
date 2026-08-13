@@ -1,0 +1,25 @@
+# Python bytecode & cache
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Environment & local settings
+.env
+.venv
+env/
+venv/
+
+# Large model weights
+weights/
+*.zip
+*.onnx
+*.pth
+*.bin
+*.h5
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

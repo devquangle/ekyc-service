@@ -1,0 +1,107 @@
+import cv2
+import numpy as np
+from typing import Tuple, Optional, List, Dict, Any
+from config import settings
+from schemas.face import BoundingBoxInfo
+from utils.logger import logger
+from utils.image_utils import crop_image
+
+
+class CardFaceExtractor:
+    """
+    Layout-agnostic card face detector and extractor.
+    Detects human portrait faces on CCCD / ID card images and validates crop size.
+    """
+
+    def __init__(self, face_app=None):
+        self.face_app = face_app
+
+    def extract_face(self, card_image: np.ndarray) -> Tuple[Optional[np.ndarray], Optional[np.ndarray], BoundingBoxInfo, List[str]]:
+        """
+        Detects and extracts portrait face from card image.
+        Returns: (cropped_face_img, landmarks, BoundingBoxInfo, errors)
+        """
+        errors: List[str] = []
+        empty_bbox = BoundingBoxInfo(detected=False)
+
+        if card_image is None or card_image.size == 0:
+            errors.append("CARD_PORTRAIT_FACE_NOT_FOUND")
+            return None, None, empty_bbox, errors
+
+        # 1. Primary detection using InsightFace (if app loaded)
+        if self.face_app is not None:
+            try:
+                faces = self.face_app.get(card_image)
+                if faces:
+                    # Select largest face on card
+                    best_face = max(
+                        faces,
+                        key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])
+                    )
+                    x1, y1, x2, y2 = [int(v) for v in best_face.bbox[:4]]
+                    w, h = max(0, x2 - x1), max(0, y2 - y1)
+                    score = float(getattr(best_face, 'det_score', 0.95))
+                    kps = getattr(best_face, 'kps', None)
+
+                    bbox_info = BoundingBoxInfo(
+                        detected=True,
+                        bbox=[x1, y1, x2, y2],
+                        x1=x1, y1=y1, x2=x2, y2=y2,
+                        width=w, height=h,
+                        detectionScore=score
+                    )
+
+                    # Size check
+                    if w < settings.MIN_CARD_FACE_WIDTH or h < settings.MIN_CARD_FACE_HEIGHT:
+                        logger.warning(f"Card face crop too small: {w}x{h} < {settings.MIN_CARD_FACE_WIDTH}x{settings.MIN_CARD_FACE_HEIGHT}")
+                        errors.append("CARD_FACE_TOO_SMALL")
+                        return None, kps, bbox_info, errors
+
+                    face_crop = crop_image(card_image, [x1, y1, x2, y2])
+                    return face_crop, kps, bbox_info, errors
+            except Exception as e:
+                logger.error(f"InsightFace card face extraction error: {str(e)}")
+
+        # 2. Fallback detection using OpenCV Haar Cascade
+        try:
+            gray = cv2.cvtColor(card_image, cv2.COLOR_BGR2GRAY)
+            cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
+            detected_faces = cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4)
+
+            if len(detected_faces) > 0:
+                # Sort by area descending
+                detected_faces = sorted(detected_faces, key=lambda f: f[2] * f[3], reverse=True)
+                fx, fy, fw, fh = [int(v) for v in detected_faces[0]]
+                x1, y1, x2, y2 = fx, fy, fx + fw, fy + fh
+
+                bbox_info = BoundingBoxInfo(
+                    detected=True,
+                    bbox=[x1, y1, x2, y2],
+                    x1=x1, y1=y1, x2=x2, y2=y2,
+                    width=fw, height=fh,
+                    detectionScore=0.90
+                )
+
+                if fw < settings.MIN_CARD_FACE_WIDTH or fh < settings.MIN_CARD_FACE_HEIGHT:
+                    errors.append("CARD_FACE_TOO_SMALL")
+                    return None, None, bbox_info, errors
+
+                face_crop = crop_image(card_image, [x1, y1, x2, y2])
+                return face_crop, None, bbox_info, errors
+        except Exception as e:
+            logger.error(f"Fallback Haar Cascade card face extraction error: {str(e)}")
+
+        # 3. If card_image is already a cropped portrait (small aspect ratio face image), use it directly
+        ch, cw = card_image.shape[:2]
+        if 0.5 <= cw / max(1, ch) <= 1.8 and cw >= settings.MIN_CARD_FACE_WIDTH and ch >= settings.MIN_CARD_FACE_HEIGHT:
+            bbox_info = BoundingBoxInfo(
+                detected=True,
+                bbox=[0, 0, cw, ch],
+                x1=0, y1=0, x2=cw, y2=ch,
+                width=cw, height=ch,
+                detectionScore=0.80
+            )
+            return card_image, None, bbox_info, errors
+
+        errors.append("CARD_PORTRAIT_FACE_NOT_FOUND")
+        return None, None, empty_bbox, errors
