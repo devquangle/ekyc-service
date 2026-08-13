@@ -68,9 +68,9 @@ class QrParser:
         if res:
             return res
 
-        # Step 2: Crop top-right QR Code ROI (front side CCCD)
+        # Step 2: Crop top-right QR Code ROI (front side CCCD: y:0-45%, x:50-100%)
         h, w = image.shape[:2]
-        qr_crop = image[0:int(h * 0.45), int(w * 0.55):w]
+        qr_crop = image[0:int(h * 0.45), int(w * 0.50):w]
         if qr_crop.size == 0:
             return None
 
