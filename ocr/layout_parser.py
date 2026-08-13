@@ -66,7 +66,8 @@ class LayoutParser:
                     prev_max_x = max(pt[0] for pt in prev_token.bbox)
                     gap_x = token_min_x - prev_max_x
 
-                    if gap_x > 0.1 * avg_height or not (text_parts[-1].endswith(" ") or token.text.startswith(" ")):
+                    # Insert space if gap_x > 2.0 or gap_x > 0.1 * avg_height or tokens lack whitespace
+                    if gap_x > 2.0 or gap_x > 0.1 * avg_height or not (text_parts[-1].endswith(" ") or token.text.startswith(" ")):
                         text_parts.append(" " + token.text)
                     else:
                         text_parts.append(token.text)
