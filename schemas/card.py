@@ -48,7 +48,6 @@ class CrossValidationResult(BaseModel):
     details: List[CrossValidationDetail] = []
 
 
-
 class QualityChecks(BaseModel):
     isBlur: bool = False
     hasGlare: bool = False
@@ -63,3 +62,4 @@ class CardProcessResponse(BaseModel):
     crossValidation: CrossValidationResult = Field(default_factory=CrossValidationResult)
     qualityChecks: QualityChecks = Field(default_factory=QualityChecks)
     fieldMetadata: List[FieldMetadata] = Field(default_factory=list)
+    errors: List[str] = Field(default_factory=list, description="List of card validation/processing errors or warnings")
