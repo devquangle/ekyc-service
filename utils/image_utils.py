@@ -20,28 +20,42 @@ def decode_image_bytes(image_bytes: bytes) -> Optional[np.ndarray]:
         return None
 
 
-def check_image_quality(image: np.ndarray) -> Tuple[bool, bool]:
+def check_image_quality(image: np.ndarray) -> Tuple[bool, bool, bool]:
     """
-    Evaluates image blur using Laplacian Variance and glare using HSV thresholding.
-    Returns: (is_blur, has_glare)
+    Evaluates image blur using Laplacian Variance, glare using HSV thresholding,
+    and cropped status using margin boundary detection.
+    Returns: (is_blur, has_glare, is_cropped)
     """
     if image is None or image.size == 0:
-        return True, False
+        return True, False, True
 
-    # Blur detection
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    # 1. Blur detection
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if len(image.shape) == 3 else image
     laplacian_var = cv2.Laplacian(gray, cv2.CV_64F).var()
     is_blur = laplacian_var < settings.IMAGE_BLUR_THRESHOLD
 
-    # Glare detection (HSV value channel over-exposure)
-    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV)
-    v_channel = hsv[:, :, 2]
+    # 2. Glare detection
+    hsv = cv2.cvtColor(image, cv2.COLOR_BGR2HSV) if len(image.shape) == 3 else image
+    v_channel = hsv[:, :, 2] if len(hsv.shape) == 3 else hsv
     glare_pixels = np.sum(v_channel > 250)
     total_pixels = v_channel.size
     glare_ratio = glare_pixels / float(total_pixels)
     has_glare = glare_ratio > 0.05
 
-    return is_blur, has_glare
+    # 3. Cropped detection (margin boundary threshold)
+    h, w = gray.shape[:2]
+    border_margin = int(min(h, w) * 0.02)
+    top_edge = gray[0:border_margin, :]
+    bottom_edge = gray[h - border_margin:h, :]
+    left_edge = gray[:, 0:border_margin]
+    right_edge = gray[:, w - border_margin:w]
+
+    # High contrast gradients touching extreme border indicate image crop
+    is_cropped = bool(
+        np.std(top_edge) > 60 or np.std(bottom_edge) > 60 or np.std(left_edge) > 60 or np.std(right_edge) > 60
+    )
+
+    return is_blur, has_glare, is_cropped
 
 
 def crop_image(image: np.ndarray, bbox: List[int]) -> Optional[np.ndarray]:
