@@ -13,35 +13,78 @@ from ocr.normalizer import (
 from utils.text_utils import remove_vietnamese_accents
 from utils.logger import logger
 
+# Official Card Keywords printed on physical cards (CCCD Mới 2023 & CCCD Cũ 2021)
 FIELD_KEYWORDS = {
     "identityNumber": [
-        "số / no.", "số", "no.", "identity no", "identity number", "so"
+        "Số định danh cá nhân / No:",
+        "Số định danh cá nhân / No",
+        "Số định danh cá nhân",
+        "Số / No.:",
+        "Số / No:",
+        "Số / No",
     ],
     "fullName": [
-        "họ và tên", "full name", "ho va ten"
+        "Họ, chữ đệm và tên khai sinh / Surname, given names:",
+        "Họ, chữ đệm và tên khai sinh / Surname, given names",
+        "Họ, chữ đệm và tên khai sinh",
+        "Surname, given names",
+        "Họ và tên / Full name:",
+        "Họ và tên / Full name",
+        "Họ và tên",
+        "Full name",
     ],
     "dateOfBirth": [
-        "ngày sinh", "date of birth", "ngay sinh"
+        "Ngày, tháng, năm sinh / Date of birth:",
+        "Ngày, tháng, năm sinh / Date of birth",
+        "Ngày, tháng, năm sinh",
+        "Ngày sinh / Date of birth:",
+        "Ngày sinh / Date of birth",
+        "Ngày sinh",
+        "Date of birth",
     ],
     "gender": [
-        "giới tính", "sex", "gioi tinh"
+        "Giới tính / Sex:",
+        "Giới tính / Sex",
+        "Giới tính",
+        "Sex",
     ],
     "nationality": [
-        "quốc tịch", "nationality", "quoc tich"
+        "Quốc tịch / Nationality:",
+        "Quốc tịch / Nationality",
+        "Quốc tịch",
+        "Nationality",
     ],
     "placeOfOrigin": [
-        "quê quán", "place of origin", "que quan", "queguan",
-        "nơi đăng ký khai sinh", "place of birth registration", "noi dang ky khai sinh"
+        "Nơi đăng ký khai sinh / Place of birth registration:",
+        "Nơi đăng ký khai sinh / Place of birth registration",
+        "Nơi đăng ký khai sinh",
+        "Place of birth registration",
+        "Quê quán / Place of origin:",
+        "Quê quán / Place of origin",
+        "Quê quán",
+        "Place of origin",
     ],
     "placeOfResidence": [
-        "nơi thường trú", "place of residence", "noi thuong tru",
-        "nơi cư trú", "noi cu tru"
+        "Nơi cư trú / Place of residence:",
+        "Nơi cư trú / Place of residence",
+        "Nơi cư trú",
+        "Nơi thường trú / Place of residence:",
+        "Nơi thường trú / Place of residence",
+        "Nơi thường trú",
+        "Place of residence",
     ],
     "dateOfIssue": [
-        "ngày cấp", "date of issue", "ngay cap"
+        "Ngày, tháng, năm cấp / Date, month, year",
+        "Ngày, tháng, năm cấp",
+        "Ngày, tháng, năm / Date, month, year:",
+        "Ngày, tháng, năm / Date, month, year",
+        "Ngày, tháng, năm",
+        "Date, month, year",
     ],
     "dateOfExpiry": [
-        "có giá trị đến", "date of expiry", "date of expiration", "co gia tri den", "ngay het han"
+        "Có giá trị đến / Date of expiry",
+        "Có giá trị đến",
+        "Date of expiry",
     ]
 }
 
@@ -58,8 +101,8 @@ class ExtractedField(BaseModel):
 
 class FieldExtractor:
     """
-    Extracts structured card fields based on keyword matching, layout line grouping,
-    and spatial bounding box constraints without hardcoding personal data.
+    Extracts structured card fields based on exact official card keywords,
+    layout line grouping, and spatial bounding box constraints.
     """
 
     def __init__(self):
@@ -202,7 +245,7 @@ class FieldExtractor:
         raw_name = ""
         target_line_idx = kw_idx
 
-        inline_val = self._get_text_right_of_keyword(kw_line, kw_str)
+        inline_val = self._strip_header_label(kw_line.text, "fullName")
         if inline_val and len(inline_val) > 2:
             raw_name = inline_val
         elif kw_idx + 1 < len(layout_lines):
@@ -240,7 +283,7 @@ class FieldExtractor:
 
         if kw_info:
             kw_idx, kw_line, kw_str = kw_info
-            inline_val = self._get_text_right_of_keyword(kw_line, kw_str)
+            inline_val = self._strip_header_label(kw_line.text, "gender")
             if inline_val:
                 raw_gender_str = inline_val
                 target_line = kw_line
@@ -285,7 +328,7 @@ class FieldExtractor:
         raw_nat = "Việt Nam"
         if kw_info:
             kw_idx, kw_line, kw_str = kw_info
-            inline_val = self._get_text_right_of_keyword(kw_line, kw_str)
+            inline_val = self._strip_header_label(kw_line.text, "nationality")
             if inline_val and len(inline_val) >= 3:
                 raw_nat = inline_val
 
@@ -312,7 +355,7 @@ class FieldExtractor:
 
         gathered_tokens = []
 
-        inline_val = self._get_text_right_of_keyword(kw_line, kw_str)
+        inline_val = self._strip_header_label(kw_line.text, field_name)
         if inline_val and len(inline_val) > 1:
             gathered_tokens.append(inline_val)
 
@@ -383,32 +426,25 @@ class FieldExtractor:
             bbox=[[float(pt[0]), float(pt[1])] for pt in kw_line.tokens[0].bbox] if kw_line.tokens else None
         )
 
-    def _get_text_right_of_keyword(self, line: LayoutLine, kw_str: str) -> Optional[str]:
-        text = line.text
+    def _strip_header_label(self, line_text: str, field_name: str) -> Optional[str]:
+        kw_list = FIELD_KEYWORDS.get(field_name, [])
+        if not kw_list:
+            return None
 
-        # Strip standard bilingual header labels e.g. "Quê quán / Place of origin:"
-        header_patterns = [
-            r'^.*?(?:họ\s*và\s*tên|full\s*name)[:\s\/._]*',
-            r'^.*?(?:quê\s*quán|place\s*of\s*origin|nơi\s*đăng\s*ký\s*khai\s*sinh|place\s*of\s*birth\s*registration)[:\s\/._]*',
-            r'^.*?(?:nơi\s*thường\s*trú|place\s*of\s*residence|nơi\s*cư\s*trú)[:\s\/._]*',
-            r'^.*?(?:ngày\s*sinh|date\s*of\s*birth)[:\s\/._]*',
-            r'^.*?(?:giới\s*tính|sex)[:\s\/._]*',
-            r'^.*?(?:quốc\s*tịch|nationality)[:\s\/._]*',
-            r'^.*?(?:có\s*giá\s*trị\s*đến|date\s*of\s*expiry|date\s*of\s*expiration)[:\s\/._]*',
-            r'^.*?(?:ngày\s*cấp|date\s*of\s*issue)[:\s\/._]*',
-            r'^.*?(?:số|no\.)[:\s\/._]*',
-        ]
+        # Build regex matching exact card labels for this field
+        kw_patterns = [re.escape(k) for k in sorted(kw_list, key=len, reverse=True)]
+        pattern_str = r'^.*?(?:' + '|'.join(kw_patterns) + r')[:\s\/._]*'
+        
+        cleaned = re.sub(pattern_str, '', line_text, flags=re.IGNORECASE).strip()
 
-        cleaned = text
-        for pat in header_patterns:
-            match = re.search(pat, cleaned, re.IGNORECASE)
-            if match:
-                cleaned = cleaned[match.end():].strip()
+        # Also strip unaccented versions if OCR missed accents
+        if cleaned == line_text:
+            unaccented_patterns = [re.escape(remove_vietnamese_accents(k)) for k in sorted(kw_list, key=len, reverse=True)]
+            unaccented_regex = r'^.*?(?:' + '|'.join(unaccented_patterns) + r')[:\s\/._]*'
+            cleaned = re.sub(unaccented_regex, '', line_text, flags=re.IGNORECASE).strip()
 
-        if cleaned and len(cleaned) > 0 and cleaned != text:
-            # Further strip leftover bilingual label tokens if any
-            cleaned = re.sub(r'^(?:full\s*name|place\s*of\s*origin|place\s*of\s*residence|date\s*of\s*birth|sex|nationality|date\s*of\s*expiry|date\s*of\s*issue)[:\s\/._]*', '', cleaned, flags=re.IGNORECASE).strip()
-            return cleaned if len(cleaned) > 0 else None
+        if cleaned and len(cleaned) > 0 and cleaned != line_text:
+            return cleaned
 
         return None
 
