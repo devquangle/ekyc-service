@@ -1,3 +1,4 @@
+import uuid
 from typing import List, Optional
 from pydantic import BaseModel, Field
 from schemas.card import CardProcessResponse
@@ -6,11 +7,11 @@ from schemas.liveness import LivenessResponse
 
 
 class FullEkycResponse(BaseModel):
-    requestId: str = Field(..., description="Unique UUID for tracing execution")
-    status: str = "SUCCESS"  # SUCCESS or FAILED
-    ekycResult: str = "EKYC_NOT_VERIFIED"  # EKYC_VERIFIED or EKYC_NOT_VERIFIED
-    executionTimeMs: float = 0.0
-    cardResult: Optional[CardProcessResponse] = None
-    faceResult: Optional[FaceVerifyResponse] = None
-    livenessResult: Optional[LivenessResponse] = None
-    failureReasons: List[str] = Field(default_factory=list)
+    requestId: str = Field(default_factory=lambda: str(uuid.uuid4()), description="Unique UUID for tracing execution")
+    status: str = Field(default="SUCCESS", description="Overall execution status: SUCCESS or FAILED")
+    ekycResult: str = Field(default="EKYC_NOT_VERIFIED", description="Final verification outcome: EKYC_VERIFIED or EKYC_NOT_VERIFIED")
+    executionTimeMs: float = Field(default=0.0, description="Total pipeline execution time in milliseconds")
+    cardResult: Optional[CardProcessResponse] = Field(default=None, description="Card OCR and Cross-Validation result")
+    faceResult: Optional[FaceVerifyResponse] = Field(default=None, description="Face Matching result")
+    livenessResult: Optional[LivenessResponse] = Field(default=None, description="Video Liveness Detection result")
+    failureReasons: List[str] = Field(default_factory=list, description="Aggregated list of failure reason codes")
