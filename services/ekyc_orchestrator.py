@@ -49,7 +49,7 @@ class EkycOrchestrator:
                 errors=["INVALID_IMAGE_FORMAT"]
             )
 
-        card_type, card_type_conf, extracted_data, qr_data, mrz_data, quality_checks = self.card_processor.process(front_img, back_img)
+        card_type, card_type_conf, extracted_data, qr_data, mrz_data, quality_checks, field_metadata = self.card_processor.process(front_img, back_img)
 
         card_verified, cross_val_result, val_errors = self.card_validator.validate(
             extracted_data, qr_data, mrz_data, card_type
@@ -66,6 +66,7 @@ class EkycOrchestrator:
             extractedData=extracted_data,
             crossValidation=cross_val_result,
             qualityChecks=quality_checks,
+            fieldMetadata=field_metadata,
             errors=all_errors
         )
 

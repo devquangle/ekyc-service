@@ -1,13 +1,147 @@
 import os
-from typing import List, Union
+from typing import List, Union, Dict, Any
 from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+# Extended Canonical Field Keyword Configuration (9 Canonical Fields)
+# Includes noisy OCR variants (e.g. /Piace of origin, Date.of.expiry, cogiatr, queguan)
+FIELD_KEYWORDS: Dict[str, Dict[str, List[str]]] = {
+    "identityNumber": {
+        "en": [
+            "no",
+            "no.",
+            "number",
+            "id no",
+            "identity no",
+            "personal identification number",
+        ],
+        "vi": [
+            "số",
+            "số định danh",
+            "số định danh cá nhân",
+            "số căn cước",
+            "số cccd",
+        ],
+    },
+    "fullName": {
+        "en": [
+            "full name",
+            "name",
+            "surname, given names",
+        ],
+        "vi": [
+            "họ và tên",
+            "họ tên",
+            "họ và tên khai sinh",
+            "họ, chữ đệm và tên khai sinh",
+        ],
+    },
+    "dateOfBirth": {
+        "en": [
+            "date of birth",
+            "birth date",
+            "dob",
+        ],
+        "vi": [
+            "ngày sinh",
+            "ngày tháng năm sinh",
+            "ngày, tháng, năm sinh",
+        ],
+    },
+    "gender": {
+        "en": [
+            "sex",
+            "gender",
+        ],
+        "vi": [
+            "giới tính",
+        ],
+    },
+    "nationality": {
+        "en": [
+            "nationality",
+        ],
+        "vi": [
+            "quốc tịch",
+        ],
+    },
+    "placeOfOrigin": {
+        "en": [
+            "place of origin",
+            "piace of origin",
+            "place.of.origin",
+            "piace.of.origin",
+            "place of orig",
+            "place of birth registration",
+        ],
+        "vi": [
+            "quê quán",
+            "queguan",
+            "quequan",
+            "nơi đăng ký khai sinh",
+        ],
+    },
+    "placeOfResidence": {
+        "en": [
+            "place of residence",
+            "place.of.residence",
+            "permanent residence",
+            "permanent address",
+        ],
+        "vi": [
+            "nơi thường trú",
+            "nơi cư trú",
+            "thường trú",
+            "địa chỉ thường trú",
+        ],
+    },
+    "dateOfIssue": {
+        "en": [
+            "date of issue",
+            "issue date",
+            "date month year",
+            "date, month, year",
+            "date,monthyear",
+            "date,month,year",
+            "monthyear",
+        ],
+        "vi": [
+            "ngày cấp",
+            "ngày tháng năm cấp",
+            "ngày, tháng, năm cấp",
+            "ngày tháng năm",
+            "ngày, tháng, năm",
+            "ngaythang,nam",
+            "ngaythangnam",
+        ],
+    },
+    "dateOfExpiry": {
+        "en": [
+            "date of expiry",
+            "date.of.expiry",
+            "dateofexpiry",
+            "expiry date",
+            "expiration date",
+            "date of expiration",
+        ],
+        "vi": [
+            "có giá trị đến",
+            "co.gia.tri.den",
+            "cogiatr",
+            "cogiatrj",
+            "cogiatrden",
+            "ngày có giá trị đến",
+            "ngày hết hạn",
+        ],
+    },
+}
 
 
 class Settings(BaseSettings):
     APP_NAME: str = "Python eKYC Service"
     DEBUG: bool = False
-    DEVICE: str = "cpu"  # "cuda" or "cpu"
+    DEVICE: str = "cpu"
 
     MODEL_DIR: str = "./models"
     INSIGHTFACE_MODEL_NAME: str = "buffalov"

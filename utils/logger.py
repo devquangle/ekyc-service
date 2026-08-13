@@ -3,6 +3,13 @@ import re
 import sys
 from typing import Any
 
+# Ensure Windows stdout uses UTF-8 encoding
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="backslashreplace")
+    except Exception:
+        pass
+
 
 class MaskingFormatter(logging.Formatter):
     """
@@ -36,6 +43,8 @@ def setup_logger() -> logging.Logger:
 
     if not logger.handlers:
         handler = logging.StreamHandler(sys.stdout)
+        if hasattr(handler, "setStream"):
+            handler.stream = sys.stdout
         formatter = MaskingFormatter(
             "[%(asctime)s] [%(levelname)s] [%(name)s]: %(message)s",
             datefmt="%Y-%m-%d %H:%M:%S"
