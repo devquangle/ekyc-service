@@ -27,3 +27,11 @@ def test_crop_portrait_from_card(dummy_card_front_image):
     cropped = engine.crop_portrait_from_card(dummy_card_front_image)
     assert cropped is not None
     assert cropped.shape[0] > 0 and cropped.shape[1] > 0
+
+
+def test_crop_portrait_no_face_returns_none():
+    engine = FaceEngine()
+    # Blank image with no face
+    blank_img = np.zeros((300, 400, 3), dtype=np.uint8)
+    cropped = engine.crop_portrait_from_card(blank_img)
+    assert cropped is None

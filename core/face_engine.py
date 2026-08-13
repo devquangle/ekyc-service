@@ -67,10 +67,14 @@ class FaceEngine:
     def crop_portrait_from_card(self, card_image: np.ndarray) -> Optional[np.ndarray]:
         """
         Detects and crops portrait photo from card image using layout-agnostic CardFaceExtractor.
+        Returns cropped face portrait array or None if no face is detected.
         """
         if card_image is None or card_image.size == 0:
             return None
+
         crop, _, _, _ = self.verification_service.card_extractor.extract_face(card_image)
         if crop is not None:
             return crop
-        return card_image
+
+        logger.warning("[FACE_ENGINE] Could not extract portrait face from card image.")
+        return None
