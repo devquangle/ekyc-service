@@ -88,17 +88,5 @@ class CardFaceExtractor:
         except Exception as e:
             logger.error(f"Fallback Haar Cascade card face extraction error: {str(e)}")
 
-        # 3. If card_image is already a cropped portrait
-        ch, cw = card_image.shape[:2]
-        if 0.5 <= cw / max(1, ch) <= 1.8 and cw >= settings.MIN_CARD_FACE_WIDTH and ch >= settings.MIN_CARD_FACE_HEIGHT:
-            bbox_info = BoundingBoxInfo(
-                detected=True,
-                bbox=[0, 0, cw, ch],
-                x1=0, y1=0, x2=cw, y2=ch,
-                width=cw, height=ch,
-                detectionScore=0.80
-            )
-            return card_image, None, bbox_info, errors
-
         errors.append("CARD_PORTRAIT_FACE_NOT_FOUND")
         return None, None, empty_bbox, errors
