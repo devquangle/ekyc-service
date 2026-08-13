@@ -35,12 +35,21 @@ def test_field_extractor_full_name():
     extractor = FieldExtractor()
     tokens = [
         OCRText(text="Họ và tên / Full name:", confidence=0.98, bbox=[[100, 100], [300, 100], [300, 120], [100, 120]]),
-        OCRText(text="TRẦN THỊ ÚT", confidence=0.97, bbox=[[310, 100], [450, 100], [450, 120], [310, 120]]),
+        OCRText(text="TRẦN THỊ ÚT", confidence=0.97, bbox=[[310, 100], [450, 100], [450, 125], [310, 125]]),
     ]
     fields = extractor.extract_all_fields(tokens)
     assert "fullName" in fields
     assert fields["fullName"].value == "TRAN THI UT"
     assert fields["fullName"].rawText == "TRẦN THỊ ÚT"
+    assert fields["fullName"].bbox == [[100.0, 100.0], [450.0, 100.0], [450.0, 125.0], [100.0, 125.0]]
+
+
+def test_merged_bbox_calculation():
+    extractor = FieldExtractor()
+    t1 = OCRText(text="Trần", confidence=0.9, bbox=[[10, 20], [50, 20], [50, 40], [10, 40]])
+    t2 = OCRText(text="Văn", confidence=0.9, bbox=[[60, 15], [100, 15], [100, 45], [60, 45]])
+    merged = extractor._compute_merged_bbox([t1, t2])
+    assert merged == [[10.0, 15.0], [100.0, 15.0], [100.0, 45.0], [10.0, 45.0]]
 
 
 def test_gender_normalization():
@@ -62,7 +71,7 @@ def test_date_parser():
     assert parse_date("01.01.1973") == "1973-01-01"
     assert parse_date("1973-01-01") == "1973-01-01"
     assert parse_date("730101") == "1973-01-01"
-    
+
     # Invalid calendar dates MUST return None
     assert parse_date("31/02/1973") is None
     assert parse_date("99/99/1973") is None
@@ -87,7 +96,7 @@ def test_normalize_full_name():
     canonical, raw_clean = normalize_full_name("TRẦN  THỊ   ÚT")
     assert canonical == "TRAN THI UT"
     assert raw_clean == "TRẦN THỊ ÚT"
-    
+
     c_none, r_none = normalize_full_name(None)
     assert c_none is None and r_none is None
 
@@ -98,7 +107,7 @@ def test_normalize_address():
     assert raw == "123 Đường Nguyễn Trãi, P.5, Q.1"
 
     cmp = normalize_address_for_compare("123 Đường Nguyễn Trãi, P.5, Q.1")
-    assert cmp == "123 DUONG NGUYEN TRAI P 5 Q 1" or "123 DUONG NGUYEN TRAI P5 Q1" in cmp
+    assert "123 DUONG NGUYEN TRAI P 5 Q 1" in cmp or "123 DUONG NGUYEN TRAI P5 Q1" in cmp
 
 
 def test_normalize_text_for_compare():
