@@ -29,7 +29,7 @@ class OCRText(BaseModel):
 class TextDetector:
     """
     PaddleOCR detector returning structured OCRText objects with bounding boxes,
-    centers, width, height, and confidence.
+    centers, width, height, and confidence rescaled to original image dimensions.
     """
 
     def __init__(self):
@@ -54,7 +54,12 @@ class TextDetector:
         if image is None or image.size == 0:
             return []
 
+        orig_h, orig_w = image.shape[:2]
         resized_img = resize_maintain_aspect(image, target_width=target_width)
+        res_h, res_w = resized_img.shape[:2]
+
+        scale_x = orig_w / float(res_w) if res_w > 0 else 1.0
+        scale_y = orig_h / float(res_h) if res_h > 0 else 1.0
 
         if self.ocr is None:
             logger.debug("TextDetector operating in fallback mode (No OCR engine).")
@@ -70,7 +75,7 @@ class TextDetector:
             for line in results[0]:
                 bbox_raw = line[0]
                 text, confidence = line[1]
-                bbox_float = [[float(pt[0]), float(pt[1])] for pt in bbox_raw]
+                bbox_float = [[float(pt[0]) * scale_x, float(pt[1]) * scale_y] for pt in bbox_raw]
 
                 token = OCRText(
                     text=str(text).strip(),
