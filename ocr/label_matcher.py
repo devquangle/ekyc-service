@@ -7,6 +7,7 @@ FIELD_LABELS: Dict[str, List[str]] = {
     "identityNumber": [
         "số định danh cá nhân / no:",
         "số định danh cá nhân / no",
+        "số định danh cá nhân / personal identification number",
         "số định danh cá nhân",
         "số / no.:",
         "số / no:",
@@ -16,10 +17,12 @@ FIELD_LABELS: Dict[str, List[str]] = {
         "họ, chữ đệm và tên khai sinh / surname, given names:",
         "họ, chữ đệm và tên khai sinh / surname, given names",
         "họ, chữ đệm và tên khai sinh",
+        "surname, given names:",
         "surname, given names",
         "họ và tên / full name:",
         "họ và tên / full name",
         "họ và tên",
+        "full name:",
         "full name",
     ],
     "dateOfBirth": [
@@ -29,27 +32,33 @@ FIELD_LABELS: Dict[str, List[str]] = {
         "ngày sinh / date of birth:",
         "ngày sinh / date of birth",
         "ngày sinh",
+        "date of birth:",
         "date of birth",
     ],
     "gender": [
         "giới tính / sex:",
         "giới tính / sex",
         "giới tính",
+        "sex:",
+        "sex",
     ],
     "nationality": [
         "quốc tịch / nationality:",
         "quốc tịch / nationality",
         "quốc tịch",
+        "nationality:",
         "nationality",
     ],
     "placeOfOrigin": [
         "nơi đăng ký khai sinh / place of birth registration:",
         "nơi đăng ký khai sinh / place of birth registration",
         "nơi đăng ký khai sinh",
+        "place of birth registration:",
         "place of birth registration",
         "quê quán / place of origin:",
         "quê quán / place of origin",
         "quê quán",
+        "place of origin:",
         "place of origin",
     ],
     "placeOfResidence": [
@@ -59,21 +68,27 @@ FIELD_LABELS: Dict[str, List[str]] = {
         "nơi thường trú / place of residence:",
         "nơi thường trú / place of residence",
         "nơi thường trú",
+        "place of residence:",
         "place of residence",
     ],
     "dateOfIssue": [
+        "ngày, tháng, năm cấp / date, month, year:",
         "ngày, tháng, năm cấp / date, month, year",
         "ngày, tháng, năm cấp",
         "ngày, tháng, năm / date, month, year:",
         "ngày, tháng, năm / date, month, year",
+        "date, month, year:",
         "date, month, year",
     ],
     "dateOfExpiry": [
+        "có giá trị đến / date of expiry:",
         "có giá trị đến / date of expiry",
         "có giá trị đến",
+        "date of expiry:",
         "date of expiry",
     ]
 }
+
 
 
 class LabelMatcher:
