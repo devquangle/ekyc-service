@@ -1,12 +1,28 @@
-from schemas.card import ExtractedCardData, CardProcessResponse, CrossValidationResult
-from schemas.face import FaceVerifyResponse
+from schemas.card import (
+    ExtractedCardData,
+    FieldMetadata,
+    CrossValidationDetail,
+    CrossValidationResult,
+    QualityChecks,
+    CardProcessResponse,
+)
+from schemas.face import (
+    BoundingBoxInfo,
+    FaceQualityMetrics,
+    FaceVerifyResponse,
+)
 from schemas.liveness import LivenessResponse
 from schemas.ekyc import FullEkycResponse
 
 __all__ = [
     "ExtractedCardData",
-    "CardProcessResponse",
+    "FieldMetadata",
+    "CrossValidationDetail",
     "CrossValidationResult",
+    "QualityChecks",
+    "CardProcessResponse",
+    "BoundingBoxInfo",
+    "FaceQualityMetrics",
     "FaceVerifyResponse",
     "LivenessResponse",
     "FullEkycResponse",
