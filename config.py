@@ -29,7 +29,6 @@ class Settings(BaseSettings):
     FACE_DETECTION_MODEL_PATH: str = "weights/face_detection.onnx"
     FACE_RECOGNITION_MODEL_PATH: str = "weights/face_recognition.onnx"
 
-
     # Liveness & Image Settings
     IMAGE_BLUR_THRESHOLD: float = 100.0
     LIVENESS_BLUR_THRESHOLD: float = 100.0
@@ -47,7 +46,7 @@ class Settings(BaseSettings):
 
 settings = Settings()
 
-# Dictionary of Keywords for Card Processing Field Extraction & Boundary Engine
+# Official Physical Card Field Labels (CCCD Mới 2023 & CCCD Cũ 2021)
 FIELD_KEYWORDS: Dict[str, Dict[str, List[str]]] = {
     "identityNumber": {
         "en": [
@@ -55,142 +54,79 @@ FIELD_KEYWORDS: Dict[str, Dict[str, List[str]]] = {
             "number",
             "identity number",
             "personal identification number",
-            "personal identificationnubo",
-            "personal identification",
         ],
         "vi": [
-            "số",
-            "số / no",
-            "so",
+            "số định danh cá nhân / no:",
             "số định danh cá nhân",
-            "so dinh danh ca nhan",
-            "sadinh danh canhan",
-            "dinh danh ca nhan",
+            "số / no.:",
+            "số / no:",
+            "số",
         ],
     },
     "fullName": {
         "en": [
+            "surname, given names",
             "full name",
-            "fullname",
-            "full name:",
-            "fuilname",
-            "fuil name",
         ],
         "vi": [
-            "họ và tên",
-            "ho va ten",
+            "họ, chữ đệm và tên khai sinh / surname, given names:",
             "họ, chữ đệm và tên khai sinh",
-            "ho, chu dem va ten khai sinh",
-            "ho.chidem va ten khal sinh",
-            "ten khai sinh",
-            "khai sinh",
+            "họ và tên / full name:",
+            "họ và tên",
         ],
     },
     "dateOfBirth": {
         "en": [
             "date of birth",
-            "date.of.birth",
-            "date of bth",
-            "date.of.bth",
-            "birth date",
-            "dob",
         ],
         "vi": [
-            "ngày sinh",
-            "ngay sinh",
+            "ngày, tháng, năm sinh / date of birth:",
             "ngày, tháng, năm sinh",
-            "ngay, thang, nam sinh",
-            "ngaythang.am sinh",
-            "ngaythang am sinh",
+            "ngày sinh / date of birth:",
+            "ngày sinh",
         ],
     },
     "placeOfOrigin": {
         "en": [
-            "place of origin",
-            "piace of origin",
-            "place.of.origin",
-            "piace.of.origin",
-            "place of orig",
             "place of birth registration",
-            "place of birth",
-            "pace of brth",
-            "pace.of.brth",
-            "place.of.birth",
+            "place of origin",
         ],
         "vi": [
-            "quê quán",
-            "queguan",
-            "quequan",
+            "nơi đăng ký khai sinh / place of birth registration:",
             "nơi đăng ký khai sinh",
-            "noi dang ky khai sinh",
-            "roi dang ky khai sinh",
-            "dang ky khai sinh",
+            "quê quán / place of origin:",
+            "quê quán",
         ],
     },
     "placeOfResidence": {
         "en": [
             "place of residence",
-            "piace of residence",
-            "place.of.residence",
-            "piace.of.residence",
-            "residence",
         ],
         "vi": [
-            "nơi thường trú",
-            "noi thuong tru",
+            "nơi cư trú / place of residence:",
             "nơi cư trú",
-            "noi cu tru",
-            "c/fcnct09",
-            "cư trú",
-            "thuong tru",
+            "nơi thường trú / place of residence:",
+            "nơi thường trú",
         ],
     },
     "dateOfExpiry": {
         "en": [
             "date of expiry",
-            "date.of.expiry",
-            "date expiry",
-            "expiry date",
-            "expiry",
-            "oate ofexiry",
-            "oate.of.exiry",
-            "oate of expiry",
         ],
         "vi": [
+            "có giá trị đến / date of expiry",
             "có giá trị đến",
-            "co gia tri den",
-            "cogiatr",
-            "cogiatri",
-            "có giá trị đến:",
-            "ngày, tháng, năm hết hạn",
-            "ngay, thang, nam het han",
-            "ngy.thang.nam het han",
-            "ngay het han",
         ],
     },
     "dateOfIssue": {
         "en": [
-            "date of issue",
-            "date.of.issue",
-            "issue date",
             "date, month, year",
-            "date.month.year",
-            "date month year",
-            "dare of ssue",
-            "dare.of.ssue",
-            "date of ssue",
         ],
         "vi": [
+            "ngày, tháng, năm cấp / date, month, year",
             "ngày, tháng, năm cấp",
-            "ngay, thang, nam cap",
-            "ngay thang nam cap",
-            "hgay.than.m cap",
-            "hgay than m cap",
-            "ngày cấp",
-            "ngay cap",
+            "ngày, tháng, năm / date, month, year:",
             "ngày, tháng, năm",
-            "ngay, thang, nam",
-            "ngaythang,nam",
         ],
     },
 }

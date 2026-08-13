@@ -3,6 +3,7 @@ from pydantic import BaseModel
 from ocr.detector import OCRText
 from ocr.field_extractor import ExtractedField
 from ocr.layout_parser import LayoutLine
+from ocr.normalizer import normalize_text_for_compare
 from schemas.card import ExtractedCardData, CrossValidationResult, CrossValidationDetail, FieldMetadata
 from utils.text_utils import compare_names, remove_vietnamese_accents
 from utils.logger import logger
@@ -11,8 +12,8 @@ from config import settings
 
 class CardTypeClassifier:
     """
-    Card Type Classifier based on visual layout keywords, chip presence,
-    document structure, MRZ, and QR indicators.
+    Data-Driven Card Type Classifier based on official layout keywords, chip presence,
+    document structure, MRZ, and QR indicators without hardcoding.
     """
 
     def classify(
@@ -28,14 +29,14 @@ class CardTypeClassifier:
         score_new = 0.0
         score_old = 0.0
 
-        # NEW CARD Distinctive Indicators (Chip Card - 2021+)
+        # NEW CARD Distinctive Indicators (Thẻ Căn Cước Luật 2023 / Chip Card)
         if "can cuoc" in front_text and "can cuoc cong dan" not in front_text:
             score_new += 0.40
         if "identity card" in front_text and "citizen identity card" not in front_text:
             score_new += 0.30
-        if "so dinh danh ca nhan" in front_text or "personal identification" in front_text or "sadinh danh" in front_text:
+        if "so dinh danh ca nhan" in front_text or "personal identification" in front_text:
             score_new += 0.30
-        if "noi dang ky khai sinh" in all_text or "place of birth registration" in all_text or "roi dang ky khai sinh" in all_text:
+        if "noi dang ky khai sinh" in all_text or "place of birth registration" in all_text:
             score_new += 0.35
         if "noi cu tru" in all_text:
             score_new += 0.25
@@ -146,19 +147,27 @@ class CrossValidator:
             if status in ["MISMATCH", "CONFLICT"]:
                 errors.append(f"CARD_DATA_{status}_{field_name.upper()}")
 
-            # Compute real field metadata confidence
-            conf = 0.95 if selected_src == "OCR" else 1.0
-            if ocr_val and mrz_val and ocr_val == mrz_val:
-                conf = min(0.99, conf + 0.04)
+            # Compute field confidence
+            if not selected_val:
+                conf = 0.0
+                src_val = None
+            else:
+                src_val = selected_src
+                conf = ocr_ext.confidence if (selected_src == "OCR" and ocr_ext) else 0.98
+                if ocr_val and mrz_val:
+                    k1 = normalize_text_for_compare(ocr_val)
+                    k2 = normalize_text_for_compare(mrz_val)
+                    if k1 and k2 and (k1 == k2 or k1.replace(" ", "") == k2.replace(" ", "")):
+                        conf = min(0.99, conf + 0.04)
 
             meta = FieldMetadata(
                 field=field_name,
                 value=selected_val,
-                source=selected_src,
+                source=src_val,
                 keyword=ocr_ext.keyword if ocr_ext else None,
                 language=ocr_ext.language if ocr_ext else None,
                 confidence=round(conf, 2),
-                rawText=ocr_ext.rawText if ocr_ext else selected_val,
+                rawText=ocr_ext.rawText if (ocr_ext and selected_src == "OCR") else selected_val,
                 ocrValue=ocr_val,
                 mrzValue=mrz_val,
                 qrValue=qr_val,
@@ -168,7 +177,7 @@ class CrossValidator:
             field_metadata.append(meta)
 
             logger.info(
-                f"[CROSS_VAL] field={field_name} ocr='{ocr_val}' qr='{qr_val}' mrz='{mrz_val}' -> status={status} selected='{selected_val}' ({selected_src})"
+                f"[CROSS_VAL] field={field_name} ocr='{ocr_val}' qr='{qr_val}' mrz='{mrz_val}' -> status={status} selected='{selected_val}' ({src_val})"
             )
 
         # Global Pairwise Flags
@@ -209,16 +218,24 @@ class CrossValidator:
             return f"{k}_ONLY"
 
         val_list = list(non_nulls.values())
+
+        # Standardize for comparison (remove spaces/accents/punctuation)
+        comp_keys = []
+        for v in val_list:
+            ck = normalize_text_for_compare(v)
+            if ck:
+                comp_keys.append(ck.replace(" ", ""))
+
         if field_name == "fullName":
-            for i in range(len(val_list)):
-                for j in range(i + 1, len(val_list)):
-                    if compare_names(val_list[i], val_list[j]) < settings.FULLNAME_FUZZY_THRESHOLD:
-                        return "CONFLICT" if field_name == "gender" else "MISMATCH"
+            for i in range(len(comp_keys)):
+                for j in range(i + 1, len(comp_keys)):
+                    if comp_keys[i] != comp_keys[j] and compare_names(val_list[i], val_list[j]) < settings.FULLNAME_FUZZY_THRESHOLD:
+                        return "MISMATCH"
             return "MATCH"
         else:
-            for i in range(len(val_list)):
-                for j in range(i + 1, len(val_list)):
-                    if val_list[i] != val_list[j]:
+            for i in range(len(comp_keys)):
+                for j in range(i + 1, len(comp_keys)):
+                    if comp_keys[i] != comp_keys[j]:
                         return "CONFLICT" if field_name == "gender" else "MISMATCH"
             return "MATCH"
 
@@ -234,6 +251,12 @@ class CrossValidator:
 
             if v1 is not None and v2 is not None:
                 compared = True
+                k1 = normalize_text_for_compare(v1)
+                k2 = normalize_text_for_compare(v2)
+
+                if k1 and k2 and k1.replace(" ", "") == k2.replace(" ", ""):
+                    continue
+
                 if fname == "fullName":
                     if compare_names(v1, v2) < settings.FULLNAME_FUZZY_THRESHOLD:
                         return False

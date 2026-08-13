@@ -25,7 +25,7 @@ class QrParser:
             return None
 
         logger.info(f"[QR_PARSER] Raw QR text decoded: {raw_qr_text}")
-        return self._parse_qr_string(raw_qr_text)
+        return self.parse_qr_string(raw_qr_text)
 
     def _try_detect_qr(self, image: np.ndarray) -> Optional[str]:
         try:
@@ -48,7 +48,7 @@ class QrParser:
 
         return None
 
-    def _parse_qr_string(self, qr_str: str) -> Optional[Dict[str, Any]]:
+    def parse_qr_string(self, qr_str: str) -> Optional[Dict[str, Any]]:
         parts = qr_str.split("|")
 
         if len(parts) < 6:

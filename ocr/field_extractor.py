@@ -3,6 +3,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from pydantic import BaseModel
 from ocr.detector import OCRText
 from ocr.layout_parser import LayoutLine, LayoutParser
+from ocr.label_matcher import LabelMatcher, FIELD_LABELS
 from ocr.normalizer import (
     normalize_unicode,
     normalize_gender,
@@ -13,81 +14,6 @@ from ocr.normalizer import (
 )
 from utils.text_utils import remove_vietnamese_accents
 from utils.logger import logger
-
-# Official Card Keywords printed on physical cards (CCCD Mới 2023 & CCCD Cũ 2021)
-FIELD_KEYWORDS = {
-    "identityNumber": [
-        "Số định danh cá nhân / No:",
-        "Số định danh cá nhân / No",
-        "Số định danh cá nhân",
-        "Số / No.:",
-        "Số / No:",
-        "Số / No",
-    ],
-    "fullName": [
-        "Họ, chữ đệm và tên khai sinh / Surname, given names:",
-        "Họ, chữ đệm và tên khai sinh / Surname, given names",
-        "Họ, chữ đệm và tên khai sinh",
-        "Surname, given names",
-        "Họ và tên / Full name:",
-        "Họ và tên / Full name",
-        "Họ và tên",
-        "Full name",
-    ],
-    "dateOfBirth": [
-        "Ngày, tháng, năm sinh / Date of birth:",
-        "Ngày, tháng, năm sinh / Date of birth",
-        "Ngày, tháng, năm sinh",
-        "Ngày sinh / Date of birth:",
-        "Ngày sinh / Date of birth",
-        "Ngày sinh",
-        "Date of birth",
-    ],
-    "gender": [
-        "Giới tính / Sex:",
-        "Giới tính / Sex",
-        "Giới tính",
-        "Sex",
-    ],
-    "nationality": [
-        "Quốc tịch / Nationality:",
-        "Quốc tịch / Nationality",
-        "Quốc tịch",
-        "Nationality",
-    ],
-    "placeOfOrigin": [
-        "Nơi đăng ký khai sinh / Place of birth registration:",
-        "Nơi đăng ký khai sinh / Place of birth registration",
-        "Nơi đăng ký khai sinh",
-        "Place of birth registration",
-        "Quê quán / Place of origin:",
-        "Quê quán / Place of origin",
-        "Quê quán",
-        "Place of origin",
-    ],
-    "placeOfResidence": [
-        "Nơi cư trú / Place of residence:",
-        "Nơi cư trú / Place of residence",
-        "Nơi cư trú",
-        "Nơi thường trú / Place of residence:",
-        "Nơi thường trú / Place of residence",
-        "Nơi thường trú",
-        "Place of residence",
-    ],
-    "dateOfIssue": [
-        "Ngày, tháng, năm cấp / Date, month, year",
-        "Ngày, tháng, năm cấp",
-        "Ngày, tháng, năm / Date, month, year:",
-        "Ngày, tháng, năm / Date, month, year",
-        "Ngày, tháng, năm",
-        "Date, month, year",
-    ],
-    "dateOfExpiry": [
-        "Có giá trị đến / Date of expiry",
-        "Có giá trị đến",
-        "Date of expiry",
-    ]
-}
 
 
 class ExtractedField(BaseModel):
@@ -102,12 +28,14 @@ class ExtractedField(BaseModel):
 
 class FieldExtractor:
     """
-    Extracts structured card fields based on exact official card keywords,
-    layout line grouping, and spatial bounding box constraints.
+    Data-Driven Generic Field Extractor.
+    Uses spatial bounding box layout parsing, LabelMatcher fuzzy label recognition,
+    and line boundary isolation without hardcoding personal identity data or OCR typos.
     """
 
     def __init__(self):
         self.layout_parser = LayoutParser()
+        self.label_matcher = LabelMatcher(min_similarity_threshold=0.70)
 
     def extract_all_fields(
         self, tokens: List[OCRText]
@@ -173,21 +101,11 @@ class FieldExtractor:
         matches: Dict[str, Tuple[int, LayoutLine, str]] = {}
 
         for line_idx, line in enumerate(layout_lines):
-            clean_line = remove_vietnamese_accents(line.text).lower()
-            clean_line_dots = re.sub(r'[\/._\-]+', ' ', clean_line).strip()
-
-            for field_name, kw_list in FIELD_KEYWORDS.items():
-                if field_name in matches:
-                    continue
-
-                for kw in kw_list:
-                    kw_unaccented = remove_vietnamese_accents(kw).lower()
-                    kw_clean = re.sub(r'[\/._\-]+', ' ', kw_unaccented).strip()
-
-                    pattern = r'\b' + re.escape(kw_clean) + r'\b'
-                    if re.search(pattern, clean_line) or re.search(pattern, clean_line_dots) or kw_clean in clean_line:
-                        matches[field_name] = (line_idx, line, kw)
-                        break
+            match_res = self.label_matcher.match_line_label(line.text)
+            if match_res:
+                field_name, matched_label, conf = match_res
+                if field_name not in matches:
+                    matches[field_name] = (line_idx, line, matched_label)
 
         return matches
 
@@ -200,19 +118,17 @@ class FieldExtractor:
 
         candidates = []
         for line_idx, line in enumerate(layout_lines):
-            # Check for candidate ID sequence (allowing OCR confusion characters like O, I, L)
+            # Check full line
             norm_id = normalize_identity_number(line.text)
             if norm_id:
                 score = 0.5 + line.confidence * 0.3
-
                 if kw_info and abs(line_idx - kw_info[0]) <= 1:
                     score += 0.2
                 if line.center_y < 400:
                     score += 0.1
-
                 candidates.append((score, norm_id, line.text, line))
             else:
-                # Also try sub-search if line contains extra text
+                # Sub-search in line text for 9 or 12 digit candidate
                 match = re.search(r'\b[0O][0-9OIL]{11}\b|\b[0-9OIL]{12}\b|\b[0-9OIL]{9}\b', line.text, re.IGNORECASE)
                 if match:
                     raw_id = match.group(0)
@@ -438,14 +354,14 @@ class FieldExtractor:
         )
 
     def _strip_header_label(self, line_text: str, field_name: str) -> Optional[str]:
-        kw_list = FIELD_KEYWORDS.get(field_name, [])
+        kw_list = FIELD_LABELS.get(field_name, [])
         if not kw_list:
             return None
 
         # Build regex matching exact card labels for this field
         kw_patterns = [re.escape(k) for k in sorted(kw_list, key=len, reverse=True)]
         pattern_str = r'^.*?(?:' + '|'.join(kw_patterns) + r')[:\s\/._]*'
-        
+
         cleaned = re.sub(pattern_str, '', line_text, flags=re.IGNORECASE).strip()
 
         # Also strip unaccented versions if OCR missed accents
@@ -460,13 +376,10 @@ class FieldExtractor:
         return None
 
     def _is_keyword_line(self, line: LayoutLine, exclude_field: Optional[str] = None) -> bool:
-        clean_text = remove_vietnamese_accents(line.text).lower()
-
-        for field_name, kw_list in FIELD_KEYWORDS.items():
+        match_res = self.label_matcher.match_line_label(line.text)
+        if match_res:
+            field_name, _, _ = match_res
             if exclude_field and field_name == exclude_field:
-                continue
-            for kw in kw_list:
-                kw_clean = remove_vietnamese_accents(kw).lower()
-                if kw_clean in clean_text:
-                    return True
+                return False
+            return True
         return False
