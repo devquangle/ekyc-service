@@ -7,6 +7,18 @@ from utils.logger import logger
 from utils.image_utils import crop_image
 
 
+def _clip_bbox(x1: int, y1: int, x2: int, y2: int, img_w: int, img_h: int) -> Tuple[int, int, int, int]:
+    """
+    Clips bounding box coordinates so they strictly stay within image dimensions [0, img_w] x [0, img_h].
+    Ensures width (x2 - x1) > 0 and height (y2 - y1) > 0.
+    """
+    cx1 = max(0, min(x1, img_w - 1))
+    cy1 = max(0, min(y1, img_h - 1))
+    cx2 = max(cx1 + 1, min(x2, img_w))
+    cy2 = max(cy1 + 1, min(y2, img_h))
+    return cx1, cy1, cx2, cy2
+
+
 class CardFaceExtractor:
     """
     Layout-agnostic card face detector and extractor.
@@ -28,6 +40,8 @@ class CardFaceExtractor:
             errors.append("CARD_PORTRAIT_FACE_NOT_FOUND")
             return None, None, empty_bbox, errors
 
+        img_h, img_w = card_image.shape[:2]
+
         # 1. Primary detection using InsightFace (if app loaded)
         if self.face_app is not None:
             try:
@@ -37,8 +51,10 @@ class CardFaceExtractor:
                         faces,
                         key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1])
                     )
-                    x1, y1, x2, y2 = [int(v) for v in best_face.bbox[:4]]
-                    w, h = max(0, x2 - x1), max(0, y2 - y1)
+                    raw_x1, raw_y1, raw_x2, raw_y2 = [int(v) for v in best_face.bbox[:4]]
+                    x1, y1, x2, y2 = _clip_bbox(raw_x1, raw_y1, raw_x2, raw_y2, img_w, img_h)
+                    w, h = x2 - x1, y2 - y1
+
                     score = float(getattr(best_face, 'det_score', 0.95))
                     kps = getattr(best_face, 'kps', None)
 
@@ -69,17 +85,19 @@ class CardFaceExtractor:
             if len(detected_faces) > 0:
                 detected_faces = sorted(detected_faces, key=lambda f: f[2] * f[3], reverse=True)
                 fx, fy, fw, fh = [int(v) for v in detected_faces[0]]
-                x1, y1, x2, y2 = fx, fy, fx + fw, fy + fh
+                raw_x1, raw_y1, raw_x2, raw_y2 = fx, fy, fx + fw, fy + fh
+                x1, y1, x2, y2 = _clip_bbox(raw_x1, raw_y1, raw_x2, raw_y2, img_w, img_h)
+                w, h = x2 - x1, y2 - y1
 
                 bbox_info = BoundingBoxInfo(
                     detected=True,
                     bbox=[x1, y1, x2, y2],
                     x1=x1, y1=y1, x2=x2, y2=y2,
-                    width=fw, height=fh,
+                    width=w, height=h,
                     detectionScore=0.90
                 )
 
-                if fw < settings.MIN_CARD_FACE_WIDTH or fh < settings.MIN_CARD_FACE_HEIGHT:
+                if w < settings.MIN_CARD_FACE_WIDTH or h < settings.MIN_CARD_FACE_HEIGHT:
                     errors.append("CARD_FACE_TOO_SMALL")
                     return None, None, bbox_info, errors
 

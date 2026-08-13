@@ -7,6 +7,18 @@ from utils.logger import logger
 from utils.image_utils import crop_image
 
 
+def _clip_bbox(x1: int, y1: int, x2: int, y2: int, img_w: int, img_h: int) -> Tuple[int, int, int, int]:
+    """
+    Clips bounding box coordinates so they strictly stay within image dimensions [0, img_w] x [0, img_h].
+    Ensures width (x2 - x1) > 0 and height (y2 - y1) > 0.
+    """
+    cx1 = max(0, min(x1, img_w - 1))
+    cy1 = max(0, min(y1, img_h - 1))
+    cx2 = max(cx1 + 1, min(x2, img_w))
+    cy2 = max(cy1 + 1, min(y2, img_h))
+    return cx1, cy1, cx2, cy2
+
+
 class SelfieFaceExtractor:
     """
     Selfie face detector and extractor.
@@ -28,6 +40,8 @@ class SelfieFaceExtractor:
             errors.append("SELFIE_FACE_NOT_FOUND")
             return None, None, empty_bbox, errors
 
+        img_h, img_w = selfie_image.shape[:2]
+
         # 1. InsightFace primary detector
         if self.face_app is not None:
             try:
@@ -40,8 +54,10 @@ class SelfieFaceExtractor:
                     logger.warning(f"Multiple faces detected in selfie ({len(faces)} faces found).")
                     errors.append("MULTIPLE_FACES_DETECTED")
                     best_face = max(faces, key=lambda f: (f.bbox[2] - f.bbox[0]) * (f.bbox[3] - f.bbox[1]))
-                    x1, y1, x2, y2 = [int(v) for v in best_face.bbox[:4]]
-                    w, h = max(0, x2 - x1), max(0, y2 - y1)
+                    raw_x1, raw_y1, raw_x2, raw_y2 = [int(v) for v in best_face.bbox[:4]]
+                    x1, y1, x2, y2 = _clip_bbox(raw_x1, raw_y1, raw_x2, raw_y2, img_w, img_h)
+                    w, h = x2 - x1, y2 - y1
+
                     score = float(getattr(best_face, 'det_score', 0.95))
                     kps = getattr(best_face, 'kps', None)
                     bbox_info = BoundingBoxInfo(
@@ -50,8 +66,10 @@ class SelfieFaceExtractor:
                     return None, kps, bbox_info, errors
 
                 face = faces[0]
-                x1, y1, x2, y2 = [int(v) for v in face.bbox[:4]]
-                w, h = max(0, x2 - x1), max(0, y2 - y1)
+                raw_x1, raw_y1, raw_x2, raw_y2 = [int(v) for v in face.bbox[:4]]
+                x1, y1, x2, y2 = _clip_bbox(raw_x1, raw_y1, raw_x2, raw_y2, img_w, img_h)
+                w, h = x2 - x1, y2 - y1
+
                 score = float(getattr(face, 'det_score', 0.95))
                 kps = getattr(face, 'kps', None)
 
@@ -83,18 +101,25 @@ class SelfieFaceExtractor:
                 logger.warning(f"Multiple faces detected in selfie ({len(detected_faces)} faces found).")
                 errors.append("MULTIPLE_FACES_DETECTED")
                 fx, fy, fw, fh = [int(v) for v in detected_faces[0]]
+                raw_x1, raw_y1, raw_x2, raw_y2 = fx, fy, fx + fw, fy + fh
+                x1, y1, x2, y2 = _clip_bbox(raw_x1, raw_y1, raw_x2, raw_y2, img_w, img_h)
+                w, h = x2 - x1, y2 - y1
+
                 bbox_info = BoundingBoxInfo(
-                    detected=True, bbox=[fx, fy, fx + fw, fy + fh], x1=fx, y1=fy, x2=fx + fw, y2=fy + fh, width=fw, height=fh, detectionScore=0.90
+                    detected=True, bbox=[x1, y1, x2, y2], x1=x1, y1=y1, x2=x2, y2=y2, width=w, height=h, detectionScore=0.90
                 )
                 return None, None, bbox_info, errors
 
             fx, fy, fw, fh = [int(v) for v in detected_faces[0]]
-            x1, y1, x2, y2 = fx, fy, fx + fw, fy + fh
+            raw_x1, raw_y1, raw_x2, raw_y2 = fx, fy, fx + fw, fy + fh
+            x1, y1, x2, y2 = _clip_bbox(raw_x1, raw_y1, raw_x2, raw_y2, img_w, img_h)
+            w, h = x2 - x1, y2 - y1
+
             bbox_info = BoundingBoxInfo(
-                detected=True, bbox=[x1, y1, x2, y2], x1=x1, y1=y1, x2=x2, y2=y2, width=fw, height=fh, detectionScore=0.90
+                detected=True, bbox=[x1, y1, x2, y2], x1=x1, y1=y1, x2=x2, y2=y2, width=w, height=h, detectionScore=0.90
             )
 
-            if fw < settings.MIN_SELFIE_FACE_WIDTH or fh < settings.MIN_SELFIE_FACE_HEIGHT:
+            if w < settings.MIN_SELFIE_FACE_WIDTH or h < settings.MIN_SELFIE_FACE_HEIGHT:
                 errors.append("SELFIE_FACE_TOO_SMALL")
                 return None, None, bbox_info, errors
 
@@ -104,10 +129,9 @@ class SelfieFaceExtractor:
             logger.error(f"Fallback Haar Cascade selfie face extraction error: {str(e)}")
 
         # Fallback if image itself is face size
-        sh, sw = selfie_image.shape[:2]
-        if sw >= settings.MIN_SELFIE_FACE_WIDTH and sh >= settings.MIN_SELFIE_FACE_HEIGHT:
+        if img_w >= settings.MIN_SELFIE_FACE_WIDTH and img_h >= settings.MIN_SELFIE_FACE_HEIGHT:
             bbox_info = BoundingBoxInfo(
-                detected=True, bbox=[0, 0, sw, sh], x1=0, y1=0, x2=sw, y2=sh, width=sw, height=sh, detectionScore=0.80
+                detected=True, bbox=[0, 0, img_w, img_h], x1=0, y1=0, x2=img_w, y2=img_h, width=img_w, height=img_h, detectionScore=0.80
             )
             return selfie_image, None, bbox_info, errors
 
