@@ -17,7 +17,7 @@ class ExtractedCardData(BaseModel):
 class FieldMetadata(BaseModel):
     field: str = Field(description="Name of extracted field")
     value: Optional[str] = Field(default=None, description="Final selected field value")
-    source: str = Field(default="OCR", description="Selected data source: OCR, MRZ, or QR")
+    source: Optional[str] = Field(default=None, description="Selected data source: OCR, MRZ, or QR")
     keyword: Optional[str] = Field(default=None, description="Matched label keyword for selected source")
     language: Optional[str] = Field(default=None, description="Language of matched keyword (EN/VI)")
     confidence: float = Field(default=1.0, description="Confidence score 0.0 - 1.0")

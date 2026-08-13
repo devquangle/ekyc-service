@@ -58,7 +58,8 @@ class QrParser:
         identity_number = parts[0].strip() if parts[0].strip().isdigit() and len(parts[0].strip()) == 12 else None
         old_id_number = parts[1].strip() if len(parts[1].strip()) > 0 else None
         
-        full_name, _ = normalize_full_name(parts[2].strip()) if len(parts[2].strip()) > 0 else (None, None)
+        canonical_name, raw_clean_name = normalize_full_name(parts[2].strip()) if len(parts[2].strip()) > 0 else (None, None)
+        full_name = raw_clean_name if raw_clean_name else canonical_name
         date_of_birth = parse_date(parts[3].strip()) if len(parts[3].strip()) > 0 else None
         gender = normalize_gender(parts[4].strip()) if len(parts[4].strip()) > 0 else None
         
