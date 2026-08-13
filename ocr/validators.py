@@ -71,7 +71,8 @@ class CardTypeClassifier:
 class CrossValidator:
     """
     Multi-source Priority Merger & 3-Way Cross Validation Engine (OCR vs QR vs MRZ).
-    Enforces field source priority matrices and detailed field status logging.
+    Enforces field source priority matrices, detailed field status logging, and flexible
+    verification overrides when valid QR Code data is present.
     """
 
     FIELD_PRIORITY = {
@@ -185,6 +186,8 @@ class CrossValidator:
         ocr_match_mrz = self._evaluate_pairwise(ocr_fields, mrz_data)
 
         mrz_valid = mrz_data.get("isMrzValid", True) if mrz_data else True
+        if mrz_data and not mrz_valid:
+            errors.append("CARD_DATA_WARNING_MRZ_CHECKSUM_INVALID")
 
         cross_val_result = CrossValidationResult(
             ocrMatchQr=ocr_match_qr,
@@ -194,13 +197,16 @@ class CrossValidator:
             details=details
         )
 
+        has_valid_qr = (qr_data is not None and ocr_match_qr is True)
+        mrz_pass_or_qr_override = mrz_valid or has_valid_qr
+
         card_verified = (
             card_type != "UNKNOWN"
-            and mrz_valid
             and final_card_data.identityNumber is not None
             and final_card_data.fullName is not None
+            and mrz_pass_or_qr_override
             and ocr_match_qr is not False
-            and ocr_match_mrz is not False
+            and (has_valid_qr or ocr_match_mrz is not False)
         )
 
         return card_verified, final_card_data, cross_val_result, field_metadata, errors
