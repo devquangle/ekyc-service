@@ -10,6 +10,7 @@ from ocr import (
 )
 from schemas.card import ExtractedCardData, QualityChecks, FieldMetadata
 from utils.image_utils import check_image_quality
+from utils.text_utils import remove_vietnamese_accents
 from utils.logger import logger
 
 
@@ -35,23 +36,32 @@ class CardProcessor:
         field_name: str
     ) -> Optional[str]:
         """
-        Fallback Priority for ExtractedCardData:
+        Fallback Priority for ExtractedCardData with sticky word normalization for fullName:
         1. OCR extracted value
         2. QR decoded value
         3. MRZ parsed value
         """
-        # 1. OCR primary
         ocr_ext = all_ocr_fields.get(field_name)
-        if ocr_ext and ocr_ext.value:
-            return ocr_ext.value
+        ocr_val = ocr_ext.value if ocr_ext and ocr_ext.value else None
+        qr_val = qr_data.get(field_name) if qr_data else None
+        mrz_val = mrz_data.get(field_name) if mrz_data else None
 
-        # 2. QR secondary
-        if qr_data and qr_data.get(field_name):
-            return qr_data.get(field_name)
+        # Sticky name resolution for fullName
+        if field_name == "fullName":
+            better_name = qr_val or mrz_val
+            if ocr_val and better_name:
+                k_ocr = remove_vietnamese_accents(ocr_val).replace(" ", "").upper()
+                k_better = remove_vietnamese_accents(better_name).replace(" ", "").upper()
+                if k_ocr == k_better and ocr_val.count(" ") < better_name.count(" "):
+                    logger.info(f"[CARD_PROCESSOR] Replacing sticky OCR name '{ocr_val}' with properly spaced name '{better_name}'")
+                    return better_name
 
-        # 3. MRZ tertiary
-        if mrz_data and mrz_data.get(field_name):
-            return mrz_data.get(field_name)
+        if ocr_val:
+            return ocr_val
+        if qr_val:
+            return qr_val
+        if mrz_val:
+            return mrz_val
 
         return None
 
