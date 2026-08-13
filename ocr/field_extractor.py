@@ -361,13 +361,19 @@ class FieldExtractor:
             gathered_text_parts.append(inline_val)
             gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
 
+        stop_keywords = [
+            "noi thuong tru", "place of residence", "noi cu tru",
+            "co gia tri den", "date of expiry", "date expiry",
+            "bo cong an", "ministry"
+        ]
+
         for j in range(kw_idx + 1, len(layout_lines)):
             line = layout_lines[j]
             if self._is_keyword_line(line, exclude_field=field_name):
                 break
 
             clean_j = remove_vietnamese_accents(line.text).lower()
-            if re.search(r'noi thuong tru|place of residence|co gia tri den|date of expiry|date expiry|bo cong an|ministry', clean_j):
+            if any(kw in clean_j for kw in stop_keywords):
                 break
 
             gathered_text_parts.append(line.text)
