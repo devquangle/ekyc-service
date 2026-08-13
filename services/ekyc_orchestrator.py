@@ -50,19 +50,20 @@ class EkycOrchestrator:
             )
 
         (
-            card_verified,
             card_type,
             card_type_conf,
             extracted_data,
             qr_data,
             mrz_data,
-            cross_val_result,
             quality_checks,
-            field_metadata,
-            proc_errors
+            field_metadata
         ) = self.card_processor.process(front_img, back_img)
 
-        all_errors = proc_errors[:]
+        card_verified, cross_val_result, val_errors = self.card_validator.validate(
+            extracted_data, qr_data, mrz_data, card_type
+        )
+
+        all_errors = val_errors[:]
         if quality_checks.isBlur:
             all_errors.append("CARD_BLURRY")
 
@@ -146,12 +147,15 @@ class EkycOrchestrator:
         if not face_res.faceVerified:
             failure_reasons.extend(face_res.errors)
 
-        # Step 3: Video Liveness
-        if video_bytes:
+        # Step 3: Video Liveness (Strict verification - No default bypass)
+        if video_bytes and len(video_bytes) > 0:
             liveness_res = self.detect_liveness(video_bytes)
         else:
-            # Fallback for selfie-only verification
-            liveness_res = LivenessResponse(livenessVerified=True, livenessScore=1.0, checksPassed=["SELFIE_PASSIVE_FALLBACK"])
+            liveness_res = LivenessResponse(
+                livenessVerified=False,
+                livenessScore=0.0,
+                errors=["VIDEO_MISSING"]
+            )
 
         if not liveness_res.livenessVerified:
             failure_reasons.extend(liveness_res.errors)
@@ -171,5 +175,5 @@ class EkycOrchestrator:
             cardResult=card_res,
             faceResult=face_res,
             livenessResult=liveness_res,
-            failureReasons=list(set(failure_reasons))
+            failureReasons=list(dict.fromkeys(failure_reasons))
         )

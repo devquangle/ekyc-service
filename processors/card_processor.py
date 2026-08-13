@@ -6,21 +6,18 @@ from core.mrz_engine import MrzEngine
 from ocr import (
     FieldExtractor,
     CardTypeClassifier,
-    CrossValidator,
     OCRText,
-    normalize_unicode,
 )
-from schemas.card import ExtractedCardData, QualityChecks, FieldMetadata, CrossValidationResult
+from schemas.card import ExtractedCardData, QualityChecks, FieldMetadata
 from utils.image_utils import check_image_quality
 from utils.logger import logger
 
 
 class CardProcessor:
     """
-    Primary Orchestrator for Card Processing.
-    Collects raw data across OCR, QR, and MRZ engines, classifies card type,
-    performs two-sided image quality checks, and delegates validation to CrossValidator.
-    Encapsulated in try-except block for crash-safe error reporting.
+    Primary Data Extraction Orchestrator for Card Processing.
+    Collects raw data across OCR, QR, and MRZ engines, performs image quality checks,
+    classifies card type, and returns structured extracted data for validation.
     """
 
     def __init__(self, ocr_engine: OcrEngine, qr_engine: QrEngine, mrz_engine: MrzEngine):
@@ -29,38 +26,30 @@ class CardProcessor:
         self.mrz_engine = mrz_engine
         self.field_extractor = FieldExtractor()
         self.card_classifier = CardTypeClassifier()
-        self.cross_validator = CrossValidator()
 
     def process(
         self, front_image: np.ndarray, back_image: Optional[np.ndarray] = None
     ) -> Tuple[
-        bool,
         str,
         float,
         ExtractedCardData,
         Optional[Dict[str, Any]],
         Optional[Dict[str, Any]],
-        CrossValidationResult,
         QualityChecks,
-        List[FieldMetadata],
-        List[str]
+        List[FieldMetadata]
     ]:
         empty_data = ExtractedCardData()
         empty_quality = QualityChecks(isBlur=False, hasGlare=False, isCropped=False)
-        empty_cross_val = CrossValidationResult()
 
         if front_image is None or front_image.size == 0:
             return (
-                False,
                 "UNKNOWN",
                 0.0,
                 empty_data,
                 None,
                 None,
-                empty_cross_val,
                 empty_quality,
-                [],
-                ["INVALID_IMAGE_FORMAT"]
+                []
             )
 
         try:
@@ -106,34 +95,52 @@ class CardProcessor:
 
             logger.info(f"[CARD_PROCESSOR] Classified Card Type: {card_type} (conf={card_type_confidence})")
 
-            # 7. Centralized Multi-Source Merger & Validation
-            card_verified, final_data, cross_val_result, field_metadata, errors = self.cross_validator.merge_and_validate(
-                all_ocr_fields, qr_data, mrz_data, card_type
+            # 7. Construct ExtractedCardData & FieldMetadata
+            extracted_data = ExtractedCardData(
+                identityNumber=all_ocr_fields.get("identityNumber").value if all_ocr_fields.get("identityNumber") else None,
+                fullName=all_ocr_fields.get("fullName").value if all_ocr_fields.get("fullName") else None,
+                dateOfBirth=all_ocr_fields.get("dateOfBirth").value if all_ocr_fields.get("dateOfBirth") else None,
+                gender=all_ocr_fields.get("gender").value if all_ocr_fields.get("gender") else None,
+                nationality=all_ocr_fields.get("nationality").value if all_ocr_fields.get("nationality") else None,
+                placeOfOrigin=all_ocr_fields.get("placeOfOrigin").value if all_ocr_fields.get("placeOfOrigin") else None,
+                placeOfResidence=all_ocr_fields.get("placeOfResidence").value if all_ocr_fields.get("placeOfResidence") else None,
+                dateOfIssue=all_ocr_fields.get("dateOfIssue").value if all_ocr_fields.get("dateOfIssue") else None,
+                dateOfExpiry=all_ocr_fields.get("dateOfExpiry").value if all_ocr_fields.get("dateOfExpiry") else None,
             )
 
+            field_metadata = [
+                FieldMetadata(
+                    field=fname,
+                    value=fext.value,
+                    source="OCR",
+                    keyword=fext.keyword,
+                    language=fext.language,
+                    confidence=fext.confidence,
+                    rawText=fext.rawText,
+                    ocrValue=fext.value,
+                    ocrKeyword=fext.keyword,
+                    ocrLanguage=fext.language
+                )
+                for fname, fext in all_ocr_fields.items()
+            ]
+
             return (
-                card_verified,
                 card_type,
                 card_type_confidence,
-                final_data,
+                extracted_data,
                 qr_data,
                 mrz_data,
-                cross_val_result,
                 quality_checks,
-                field_metadata,
-                errors
+                field_metadata
             )
         except Exception as e:
             logger.error(f"[CARD_PROCESSOR] Unexpected error during card processing: {str(e)}", exc_info=True)
             return (
-                False,
                 "UNKNOWN",
                 0.0,
                 empty_data,
                 None,
                 None,
-                empty_cross_val,
                 empty_quality,
-                [],
-                ["CARD_PROCESSING_ERROR"]
+                []
             )
