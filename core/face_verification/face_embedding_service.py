@@ -7,6 +7,7 @@ class FaceEmbeddingService:
     """
     Service for extracting, validating, and L2 normalizing face embeddings,
     and calculating cosine similarity between normalized vectors.
+    Strictly uses AI models without synthetic or random fallback vectors.
     """
 
     def __init__(self, face_app=None):
@@ -16,7 +17,7 @@ class FaceEmbeddingService:
         self, face_image: np.ndarray
     ) -> Tuple[Optional[np.ndarray], int, float, List[str]]:
         """
-        Extracts L2 normalized face embedding vector.
+        Extracts L2 normalized face embedding vector from cropped/aligned face image.
         Returns: (embedding_vector, dimension, norm, errors)
         """
         errors: List[str] = []
@@ -29,21 +30,22 @@ class FaceEmbeddingService:
 
         if self.face_app is not None:
             try:
-                faces = self.face_app.get(face_image)
-                if faces and hasattr(faces[0], 'embedding'):
-                    raw_vec = faces[0].embedding
-                elif hasattr(self.face_app, 'models') and 'recognition' in self.face_app.models:
+                if hasattr(self.face_app, 'models') and 'recognition' in self.face_app.models:
                     rec_model = self.face_app.models['recognition']
                     raw_vec = rec_model.get_feat(face_image)
+                else:
+                    faces = self.face_app.get(face_image)
+                    if faces and hasattr(faces[0], 'embedding'):
+                        raw_vec = faces[0].embedding
             except Exception as e:
                 logger.error(f"InsightFace embedding extraction error: {str(e)}")
 
         if raw_vec is None:
-            raw_vec = self._fallback_embedding_vector(face_image)
-
-        if raw_vec is None:
+            logger.error("[FACE_EMBEDDING] Could not extract embedding from face image (No AI vector produced).")
             errors.append("FACE_EMBEDDING_FAILED")
             return None, 0, 0.0, errors
+
+        raw_vec = np.squeeze(raw_vec)
 
         if np.isnan(raw_vec).any() or np.isinf(raw_vec).any():
             logger.error("Embedding contains NaN or Inf values.")
@@ -94,10 +96,3 @@ class FaceEmbeddingService:
         similarity = max(-1.0, min(1.0, similarity))
 
         return similarity, errors
-
-    def _fallback_embedding_vector(self, image: np.ndarray) -> np.ndarray:
-        seed = int(np.mean(image)) if image.size > 0 else 42
-        rng = np.random.RandomState(seed)
-        vec = rng.randn(512).astype(np.float32)
-        norm = np.linalg.norm(vec)
-        return vec / norm if norm > 0 else vec
