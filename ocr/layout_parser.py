@@ -19,7 +19,7 @@ class LayoutLine(BaseModel):
 class LayoutParser:
     """
     Groups spatial OCRText tokens into horizontal LayoutLines based on center_y,
-    height, and bounding box overlap.
+    height, and bounding box overlap with gap-aware word spacing.
     """
 
     def group_tokens_into_lines(
@@ -53,7 +53,25 @@ class LayoutParser:
         for line_tokens in lines:
             # Sort tokens in line left to right by center_x
             line_tokens_sorted = sorted(line_tokens, key=lambda t: t.center_x)
-            full_text = " ".join([t.text for t in line_tokens_sorted])
+
+            avg_height = sum(t.height for t in line_tokens_sorted) / float(len(line_tokens_sorted))
+
+            text_parts = []
+            for idx, token in enumerate(line_tokens_sorted):
+                if idx == 0:
+                    text_parts.append(token.text)
+                else:
+                    prev_token = line_tokens_sorted[idx - 1]
+                    token_min_x = min(pt[0] for pt in token.bbox)
+                    prev_max_x = max(pt[0] for pt in prev_token.bbox)
+                    gap_x = token_min_x - prev_max_x
+
+                    if gap_x > 0.1 * avg_height or not (text_parts[-1].endswith(" ") or token.text.startswith(" ")):
+                        text_parts.append(" " + token.text)
+                    else:
+                        text_parts.append(token.text)
+
+            full_text = "".join(text_parts).strip()
 
             xs = [t.bbox[i][0] for t in line_tokens_sorted for i in range(len(t.bbox))]
             ys = [t.bbox[i][1] for t in line_tokens_sorted for i in range(len(t.bbox))]

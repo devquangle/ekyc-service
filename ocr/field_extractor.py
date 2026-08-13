@@ -265,15 +265,18 @@ class FieldExtractor:
         keyword_matches: Dict[str, Tuple[int, LayoutLine, str]]
     ) -> Optional[ExtractedField]:
         kw_info = keyword_matches.get("gender")
-
         raw_gender_str = None
         target_line = None
 
         if kw_info:
             kw_idx, kw_line, kw_str = kw_info
             inline_val = self._strip_header_label(kw_line.text, "gender")
+
             if inline_val:
                 raw_gender_str = inline_val
+                target_line = kw_line
+            elif re.search(r'\b(nam|male|nu|nữ|female)\b', kw_line.text, re.IGNORECASE):
+                raw_gender_str = kw_line.text
                 target_line = kw_line
             elif kw_idx + 1 < len(layout_lines):
                 raw_gender_str = layout_lines[kw_idx + 1].text
@@ -282,7 +285,7 @@ class FieldExtractor:
         if not raw_gender_str:
             for line in layout_lines:
                 clean_text = remove_vietnamese_accents(line.text).lower()
-                if "nam" in clean_text or "male" in clean_text or "nu" in clean_text or "female" in clean_text:
+                if any(w in clean_text.split() for w in ["nam", "male", "nu", "female"]):
                     raw_gender_str = line.text
                     target_line = line
                     break
@@ -364,7 +367,7 @@ class FieldExtractor:
                 break
 
             clean_j = remove_vietnamese_accents(line.text).lower()
-            if re.search(r'co gia tri den|date of expiry|date expiry|bo cong an|ministry', clean_j):
+            if re.search(r'noi thuong tru|place of residence|co gia tri den|date of expiry|date expiry|bo cong an|ministry', clean_j):
                 break
 
             gathered_text_parts.append(line.text)
@@ -408,12 +411,25 @@ class FieldExtractor:
         gathered_tokens: List[OCRText] = []
         search_text = kw_line.text
 
-        # 1. First attempt to parse date directly from the keyword line
-        parsed = parse_date(kw_line.text)
-        if parsed:
-            gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
+        # 1. Inline pattern scan directly on kw_line.text for DD/MM/YYYY or DD-MM-YYYY
+        inline_match = re.search(
+            r'\b([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b',
+            kw_line.text
+        )
+        parsed = None
+        if inline_match:
+            raw_inline = inline_match.group(0)
+            parsed = parse_date(raw_inline)
+            if parsed:
+                gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
 
-        # 2. If kw_line does NOT contain a valid date, try checking kw_idx + 1 line
+        # 2. Try parsing kw_line.text directly if inline pattern wasn't distinct
+        if not parsed:
+            parsed = parse_date(kw_line.text)
+            if parsed:
+                gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
+
+        # 3. If kw_line does NOT contain a valid date, check kw_idx + 1 line
         if not parsed and kw_idx + 1 < len(layout_lines):
             next_line = layout_lines[kw_idx + 1]
             if not self._is_keyword_line(next_line):
