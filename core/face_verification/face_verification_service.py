@@ -46,7 +46,7 @@ class FaceVerificationService:
                 similarityScore=0.0,
                 threshold=settings.FACE_MATCH_THRESHOLD,
                 decision="MISMATCH",
-                margin=-settings.FACE_MATCH_THRESHOLD,
+                margin=round(0.0 - settings.FACE_MATCH_THRESHOLD, 4),
                 errors=["INVALID_IMAGE_FORMAT"]
             )
 
@@ -56,20 +56,26 @@ class FaceVerificationService:
         selfie_crop, selfie_kps, selfie_bbox, selfie_extract_errs = self.selfie_extractor.extract_face(selfie_image)
         all_errors.extend(selfie_extract_errs)
 
-        card_quality = self.quality_service.analyze_quality(card_crop, card_bbox, card_kps)
-        selfie_quality = self.quality_service.analyze_quality(selfie_crop, selfie_bbox, selfie_kps)
+        card_quality = self.quality_service.analyze_quality(card_crop, card_bbox, card_kps) if card_crop is not None else None
+        selfie_quality = self.quality_service.analyze_quality(selfie_crop, selfie_bbox, selfie_kps) if selfie_crop is not None else None
 
         self._log_face_metrics(card_bbox, selfie_bbox, card_quality, selfie_quality)
 
         if card_crop is None or selfie_crop is None or len(all_errors) > 0:
-            logger.warning(f"Face extraction failed or produced errors: {all_errors}")
+            if card_crop is None and not any("CARD" in e for e in all_errors):
+                all_errors.append("CARD_PORTRAIT_FACE_NOT_FOUND")
+            if selfie_crop is None and not any("SELFIE" in e for e in all_errors):
+                all_errors.append("SELFIE_FACE_NOT_FOUND")
+
+            unique_errors = list(dict.fromkeys(all_errors))
+            logger.warning(f"Face extraction failed or produced errors: {unique_errors}")
             return FaceVerifyResponse(
                 faceVerified=False,
                 similarityScore=0.0,
                 threshold=settings.FACE_MATCH_THRESHOLD,
                 decision="MISMATCH",
                 margin=round(0.0 - settings.FACE_MATCH_THRESHOLD, 4),
-                errors=list(dict.fromkeys(all_errors)),
+                errors=unique_errors,
                 cardFaceInfo=card_bbox,
                 selfieFaceInfo=selfie_bbox,
                 cardFaceQuality=card_quality,
@@ -91,14 +97,15 @@ class FaceVerificationService:
         )
 
         if emb_card is None or emb_selfie is None or len(all_errors) > 0:
-            logger.warning(f"Face embedding extraction failed: {all_errors}")
+            unique_errors = list(dict.fromkeys(all_errors))
+            logger.warning(f"Face embedding extraction failed: {unique_errors}")
             return FaceVerifyResponse(
                 faceVerified=False,
                 similarityScore=0.0,
                 threshold=settings.FACE_MATCH_THRESHOLD,
                 decision="MISMATCH",
                 margin=round(0.0 - settings.FACE_MATCH_THRESHOLD, 4),
-                errors=list(dict.fromkeys(all_errors)),
+                errors=unique_errors,
                 cardFaceInfo=card_bbox,
                 selfieFaceInfo=selfie_bbox,
                 cardFaceQuality=card_quality,
@@ -159,26 +166,41 @@ class FaceVerificationService:
 
     def _log_face_metrics(
         self,
-        card_bbox: BoundingBoxInfo,
-        selfie_bbox: BoundingBoxInfo,
-        card_quality: FaceQualityMetrics,
-        selfie_quality: FaceQualityMetrics
+        card_bbox: Optional[BoundingBoxInfo],
+        selfie_bbox: Optional[BoundingBoxInfo],
+        card_quality: Optional[FaceQualityMetrics],
+        selfie_quality: Optional[FaceQualityMetrics]
     ):
-        logger.info(
-            f"CARD_FACE: detected={card_bbox.detected}, bbox={card_bbox.bbox}, "
-            f"x1={card_bbox.x1}, y1={card_bbox.y1}, x2={card_bbox.x2}, y2={card_bbox.y2}, "
-            f"width={card_bbox.width}, height={card_bbox.height}, detectionScore={card_bbox.detectionScore:.4f}"
-        )
-        logger.info(
-            f"SELFIE_FACE: detected={selfie_bbox.detected}, bbox={selfie_bbox.bbox}, "
-            f"x1={selfie_bbox.x1}, y1={selfie_bbox.y1}, x2={selfie_bbox.x2}, y2={selfie_bbox.y2}, "
-            f"width={selfie_bbox.width}, height={selfie_bbox.height}, detectionScore={selfie_bbox.detectionScore:.4f}"
-        )
-        logger.info(
-            f"CARD_FACE_QUALITY: blurScore={card_quality.blurScore}, brightness={card_quality.brightness}, "
-            f"faceSize={card_quality.faceSize}, yaw={card_quality.yaw}, pitch={card_quality.pitch}, roll={card_quality.roll}"
-        )
-        logger.info(
-            f"SELFIE_FACE_QUALITY: blurScore={selfie_quality.blurScore}, brightness={selfie_quality.brightness}, "
-            f"faceSize={selfie_quality.faceSize}, yaw={selfie_quality.yaw}, pitch={selfie_quality.pitch}, roll={selfie_quality.roll}"
-        )
+        if card_bbox:
+            logger.info(
+                f"CARD_FACE: detected={card_bbox.detected}, bbox={card_bbox.bbox}, "
+                f"x1={card_bbox.x1}, y1={card_bbox.y1}, x2={card_bbox.x2}, y2={card_bbox.y2}, "
+                f"width={card_bbox.width}, height={card_bbox.height}, detectionScore={card_bbox.detectionScore:.4f}"
+            )
+        else:
+            logger.info("CARD_FACE: None")
+
+        if selfie_bbox:
+            logger.info(
+                f"SELFIE_FACE: detected={selfie_bbox.detected}, bbox={selfie_bbox.bbox}, "
+                f"x1={selfie_bbox.x1}, y1={selfie_bbox.y1}, x2={selfie_bbox.x2}, y2={selfie_bbox.y2}, "
+                f"width={selfie_bbox.width}, height={selfie_bbox.height}, detectionScore={selfie_bbox.detectionScore:.4f}"
+            )
+        else:
+            logger.info("SELFIE_FACE: None")
+
+        if card_quality:
+            logger.info(
+                f"CARD_FACE_QUALITY: blurScore={card_quality.blurScore}, brightness={card_quality.brightness}, "
+                f"faceSize={card_quality.faceSize}, yaw={card_quality.yaw}, pitch={card_quality.pitch}, roll={card_quality.roll}"
+            )
+        else:
+            logger.info("CARD_FACE_QUALITY: None")
+
+        if selfie_quality:
+            logger.info(
+                f"SELFIE_FACE_QUALITY: blurScore={selfie_quality.blurScore}, brightness={selfie_quality.brightness}, "
+                f"faceSize={selfie_quality.faceSize}, yaw={selfie_quality.yaw}, pitch={selfie_quality.pitch}, roll={selfie_quality.roll}"
+            )
+        else:
+            logger.info("SELFIE_FACE_QUALITY: None")
