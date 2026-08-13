@@ -103,14 +103,19 @@ class LivenessEngine:
 
     def _analyze_passive_frame(self, frame: np.ndarray) -> float:
         """
-        Analyzes a single frame for anti-spoofing texture / specular highlights / FFT frequency.
-        Returns score float between 0.0 and 1.0.
+        Analyzes a single frame for anti-spoofing texture, specular highlights, and FFT frequency variance.
+        Returns a score float between 0.0 and 1.0.
         """
         if frame is None or frame.size == 0:
             return 0.0
 
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
+
+        # Flat / extremely dark / low-contrast frame check
+        if np.std(gray) < 5.0:
+            return 0.0
+
         # Frequency domain analysis via FFT to detect screen moire / print patterns
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         f = np.fft.fft2(gray)
         fshift = np.fft.fftshift(f)
         magnitude_spectrum = 20 * np.log(np.abs(fshift) + 1e-8)
@@ -119,16 +124,20 @@ class LivenessEngine:
         freq_var = float(np.var(magnitude_spectrum))
 
         # Heuristic mapping to liveness confidence (higher natural texture variance -> higher score)
-        score = min(1.0, max(0.4, freq_var / 300.0))
+        score = min(1.0, max(0.0, freq_var / 300.0))
         return score
 
     def _verify_active_gestures(self, frames: List[np.ndarray], expected_gestures: List[str]) -> Tuple[bool, List[str]]:
         """
         Verifies active gesture sequence (BLINK, SMILE, TURN_LEFT, TURN_RIGHT, LOOK_UP, LOOK_DOWN).
+
+        NOTE: This module serves as a baseline/mock active gesture verifier template.
+        In production environments, this should be combined with real 68-point facial landmark,
+        Eye Aspect Ratio (EAR) blink detection, and 3D Head Pose Estimation models (e.g. MediaPipe / Dlib).
         """
         detected = []
         for gesture in expected_gestures:
-            # Simulate/verify gesture presence across frame sequence
+            # Baseline simulation / sequence verification for requested gestures
             detected.append(gesture)
 
         passed = len(detected) == len(expected_gestures)
