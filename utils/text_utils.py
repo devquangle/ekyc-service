@@ -45,11 +45,22 @@ def remove_vietnamese_accents(text: Optional[str]) -> str:
 
 def normalize_date(date_str: Optional[str]) -> Optional[str]:
     """
-    Converts various date formats (DD/MM/YYYY, DDMMYYYY, YYMMDD) to ISO YYYY-MM-DD.
+    Converts various date formats (DD/MM/YYYY, D/M/YYYY, DDMMYYYY, YYMMDD) to ISO YYYY-MM-DD.
     Strictly outputs ISO YYYY-MM-DD format.
     """
     if not date_str:
         return None
+
+    # Regex for DD/MM/YYYY or D/M/YYYY or DD-MM-YYYY
+    match = re.search(
+        r'\b([1-9]|0[1-9]|[12]\d|3[01])[/.-]([1-9]|0[1-9]|1[0-2])[/.-]((?:19|20)\d{2})\b',
+        str(date_str).strip()
+    )
+    if match:
+        day_raw, month_raw, year = match.groups()
+        day = day_raw.zfill(2)
+        month = month_raw.zfill(2)
+        return f"{year}-{month}-{day}"
 
     clean_str = re.sub(r'[^\d]', '', str(date_str).strip())
 
@@ -71,12 +82,6 @@ def normalize_date(date_str: Optional[str]) -> Optional[str]:
         if 1 <= int(dd) <= 31 and 1 <= int(mm) <= 12:
             return f"{year}-{mm}-{dd}"
 
-    # Regex for DD/MM/YYYY or DD-MM-YYYY
-    match = re.search(r'\b(0[1-9]|[12]\d|3[01])[/.-](0[1-9]|1[0-2])[/.-]((?:19|20)\d{2})\b', str(date_str).strip())
-    if match:
-        day, month, year = match.groups()
-        return f"{year}-{month}-{day}"
-
     return None
 
 
@@ -95,4 +100,3 @@ def compare_names(name1: Optional[str], name2: Optional[str]) -> float:
         return 1.0
 
     return get_levenshtein_ratio(clean_name1, clean_name2)
-
