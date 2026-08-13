@@ -1,3 +1,4 @@
+from datetime import datetime
 from typing import Tuple, Dict, Any, List, Optional
 from pydantic import BaseModel
 from ocr.detector import OCRText
@@ -189,11 +190,23 @@ class CrossValidator:
         if mrz_data and not mrz_valid:
             errors.append("CARD_DATA_WARNING_MRZ_CHECKSUM_INVALID")
 
+        # Expiry Validation
+        is_expired = False
+        exp_date_val = final_card_data.dateOfExpiry
+        if exp_date_val:
+            try:
+                exp_date = datetime.strptime(exp_date_val, "%Y-%m-%d").date()
+                if exp_date < datetime.now().date():
+                    is_expired = True
+                    errors.append("CARD_EXPIRED")
+            except ValueError:
+                pass
+
         cross_val_result = CrossValidationResult(
             ocrMatchQr=ocr_match_qr,
             ocrMatchMrz=ocr_match_mrz,
             mrzCheckDigitValid=mrz_valid,
-            isExpired=False,
+            isExpired=is_expired,
             details=details
         )
 
@@ -202,6 +215,7 @@ class CrossValidator:
 
         card_verified = (
             card_type != "UNKNOWN"
+            and not is_expired
             and final_card_data.identityNumber is not None
             and final_card_data.fullName is not None
             and mrz_pass_or_qr_override
