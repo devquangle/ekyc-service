@@ -7,6 +7,7 @@ from ocr.normalizer import (
     normalize_unicode,
     normalize_gender,
     parse_date,
+    normalize_identity_number,
     normalize_full_name,
     normalize_address,
 )
@@ -199,12 +200,9 @@ class FieldExtractor:
 
         candidates = []
         for line_idx, line in enumerate(layout_lines):
-            match = re.search(r'\b0\d{11}\b', line.text)
-            if not match:
-                match = re.search(r'\b\d{12}\b', line.text)
-
-            if match:
-                raw_id = match.group(0)
+            # Check for candidate ID sequence (allowing OCR confusion characters like O, I, L)
+            norm_id = normalize_identity_number(line.text)
+            if norm_id:
                 score = 0.5 + line.confidence * 0.3
 
                 if kw_info and abs(line_idx - kw_info[0]) <= 1:
@@ -212,19 +210,32 @@ class FieldExtractor:
                 if line.center_y < 400:
                     score += 0.1
 
-                candidates.append((score, raw_id, line))
+                candidates.append((score, norm_id, line.text, line))
+            else:
+                # Also try sub-search if line contains extra text
+                match = re.search(r'\b[0O][0-9OIL]{11}\b|\b[0-9OIL]{12}\b|\b[0-9OIL]{9}\b', line.text, re.IGNORECASE)
+                if match:
+                    raw_id = match.group(0)
+                    norm_id = normalize_identity_number(raw_id)
+                    if norm_id:
+                        score = 0.5 + line.confidence * 0.3
+                        if kw_info and abs(line_idx - kw_info[0]) <= 1:
+                            score += 0.2
+                        if line.center_y < 400:
+                            score += 0.1
+                        candidates.append((score, norm_id, raw_id, line))
 
         if not candidates:
             return None
 
         candidates.sort(key=lambda c: c[0], reverse=True)
-        best_score, best_id, best_line = candidates[0]
+        best_score, best_id, best_raw, best_line = candidates[0]
 
         kw_text = kw_info[1].text if kw_info else "Số / No."
         return ExtractedField(
             fieldName="identityNumber",
             value=best_id,
-            rawText=best_id,
+            rawText=best_raw,
             keyword=kw_text,
             language="VI/EN",
             confidence=round(min(0.99, best_score), 2),
