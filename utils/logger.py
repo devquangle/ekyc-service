@@ -23,16 +23,22 @@ class MaskingFormatter(logging.Formatter):
 
 def mask_pii(text: str) -> str:
     """
-    Masks PII elements like identity numbers, full names, dates.
+    Masks PII elements like 12-digit CCCD, 9-digit CMND numbers, and date formats.
     """
     if not isinstance(text, str):
         return str(text)
 
-    # Mask 12-digit identity number: 001095001234 -> 001095****34
+    # Mask 12-digit identity number (CCCD): 087204000897 -> 087204****97
     text = re.sub(r'\b(\d{6})\d{4}(\d{2})\b', r'\1****\2', text)
 
-    # Mask ISO Date format in logs if specified: YYYY-MM-DD -> ****-**-DD
+    # Mask 9-digit identity number (CMND): 183456789 -> 183****89
+    text = re.sub(r'\b(\d{3})\d{4}(\d{2})\b', r'\1****\2', text)
+
+    # Mask ISO Date format: YYYY-MM-DD -> ****-**-DD
     text = re.sub(r'\b\d{4}-\d{2}-(\d{2})\b', r'****-**-\1', text)
+
+    # Mask Vietnamese Date format: DD/MM/YYYY or DD-MM-YYYY -> **/**/YYYY
+    text = re.sub(r'\b\d{2}[/.-]\d{2}[/.-](\d{4})\b', r'**/**/\1', text)
 
     return text
 
