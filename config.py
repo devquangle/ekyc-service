@@ -29,6 +29,18 @@ class Settings(BaseSettings):
     FACE_DETECTION_MODEL_PATH: str = "weights/face_detection.onnx"
     FACE_RECOGNITION_MODEL_PATH: str = "weights/face_recognition.onnx"
 
+    # Card Alignment Settings (YOLOv8-Seg / OpenCV Contour fallback)
+    CARD_ALIGNER_MODEL_PATH: str = "weights/card_seg.onnx"
+    CARD_ALIGNER_ENABLED: bool = True
+    CARD_ALIGN_CONF_THRESHOLD: float = 0.50
+    CARD_ALIGN_MIN_AREA_RATIO: float = 0.10  # Min card area as fraction of image area
+
+    # Anti-Spoofing Settings (MiniFASNet ONNX / FFT fallback)
+    ANTI_SPOOF_MODEL_PATH_1: str = "weights/anti_spoof_1.onnx"
+    ANTI_SPOOF_MODEL_PATH_2: str = "weights/anti_spoof_2.onnx"
+    ANTI_SPOOF_ENABLED: bool = True
+    ANTI_SPOOF_ENSEMBLE_WEIGHT: float = 0.70  # DL model weight vs FFT (0.0=FFT only, 1.0=DL only)
+
     # Liveness & Image Settings
     IMAGE_BLUR_THRESHOLD: float = 100.0
     LIVENESS_BLUR_THRESHOLD: float = 100.0

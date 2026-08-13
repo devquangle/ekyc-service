@@ -11,6 +11,7 @@ from utils.text_utils import (
     remove_vietnamese_accents,
     compare_names,
 )
+from utils.card_aligner import CardAligner
 
 __all__ = [
     "logger",
@@ -23,4 +24,6 @@ __all__ = [
     "normalize_date",
     "remove_vietnamese_accents",
     "compare_names",
+    "CardAligner",
 ]
+

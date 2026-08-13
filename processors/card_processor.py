@@ -9,9 +9,11 @@ from ocr import (
     OCRText,
 )
 from schemas.card import ExtractedCardData, QualityChecks, FieldMetadata
+from utils.card_aligner import CardAligner
 from utils.image_utils import check_image_quality
 from utils.text_utils import remove_vietnamese_accents
 from utils.logger import logger
+from config import settings
 
 
 class CardProcessor:
@@ -27,6 +29,8 @@ class CardProcessor:
         self.mrz_engine = mrz_engine
         self.field_extractor = FieldExtractor()
         self.card_classifier = CardTypeClassifier()
+        # Card Alignment: YOLOv8-seg ONNX with OpenCV contour fallback
+        self.card_aligner = CardAligner(model_path=settings.CARD_ALIGNER_MODEL_PATH) if settings.CARD_ALIGNER_ENABLED else None
 
     def _get_field_val_with_fallback(
         self,
@@ -104,9 +108,21 @@ class CardProcessor:
                 isCropped=is_cropped_f or is_cropped_b
             )
 
-            # 2. OCR Token Detection
-            front_tokens: List[OCRText] = self.ocr_engine.detect_tokens(front_image) if self.ocr_engine else []
-            back_tokens: List[OCRText] = self.ocr_engine.detect_tokens(back_image) if (self.ocr_engine and back_image is not None and back_image.size > 0) else []
+            # 2. Card Alignment — straighten tilted/skewed card before OCR
+            ocr_front = front_image
+            ocr_back = back_image
+            if self.card_aligner:
+                aligned_front, front_was_aligned = self.card_aligner.align(front_image)
+                if front_was_aligned:
+                    ocr_front = aligned_front
+                if back_image is not None and back_image.size > 0:
+                    aligned_back, back_was_aligned = self.card_aligner.align(back_image)
+                    if back_was_aligned:
+                        ocr_back = aligned_back
+
+            # 3. OCR Token Detection (on aligned images)
+            front_tokens: List[OCRText] = self.ocr_engine.detect_tokens(ocr_front) if self.ocr_engine else []
+            back_tokens: List[OCRText] = self.ocr_engine.detect_tokens(ocr_back) if (self.ocr_engine and ocr_back is not None and ocr_back.size > 0) else []
 
             logger.info(f"[OCR_FRONT_TOKENS] count={len(front_tokens)}")
             logger.info(f"[OCR_BACK_TOKENS] count={len(back_tokens)}")

@@ -4,14 +4,23 @@ import tempfile
 import numpy as np
 from typing import List, Tuple, Optional, Dict, Any
 from config import settings
+from core.anti_spoof_engine import AntiSpoofEngine
 from utils.logger import logger
 
 
 class LivenessEngine:
     """
-    Video Liveness Detection Engine combining Passive Anti-Spoofing CNN analysis
-    and Active Challenge Gesture (Eye Aspect Ratio Blink, Smile, Head Pose) sequence verification.
+    Video Liveness Detection Engine combining MiniFASNet Deep Learning Anti-Spoofing
+    (with Enhanced FFT+LBP+Laplacian fallback) and Active Challenge Gesture
+    (Eye Aspect Ratio Blink, Smile, Head Pose) sequence verification.
     """
+
+    def __init__(self):
+        # Anti-Spoofing: MiniFASNet ONNX ensemble with enhanced texture fallback
+        self.anti_spoof = AntiSpoofEngine(
+            model_path_1=settings.ANTI_SPOOF_MODEL_PATH_1,
+            model_path_2=settings.ANTI_SPOOF_MODEL_PATH_2,
+        ) if settings.ANTI_SPOOF_ENABLED else None
 
     def analyze_video(self, video_bytes: bytes, expected_gestures: Optional[List[str]] = None) -> Tuple[bool, float, List[str], List[str]]:
         """
@@ -105,7 +114,10 @@ class LivenessEngine:
 
     def _analyze_passive_frame(self, frame: np.ndarray) -> float:
         """
-        Analyzes a single frame for anti-spoofing texture, specular highlights, and FFT frequency variance.
+        Analyzes a single frame for liveness using:
+        - MiniFASNet ONNX ensemble (if models loaded): real-face probability
+        - Fallback: Enhanced FFT + LBP + Laplacian texture analysis
+        Ensemble with original FFT score for robustness.
         Returns a score float between 0.0 and 1.0.
         """
         if frame is None or frame.size == 0:
@@ -113,21 +125,26 @@ class LivenessEngine:
 
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY) if len(frame.shape) == 3 else frame
 
-        # Flat / extremely dark / low-contrast frame check
+        # Reject completely flat/dark frames
         if np.std(gray) < 5.0:
             return 0.0
 
-        # Frequency domain analysis via FFT to detect screen moire / print patterns
+        # Original FFT score (kept as safety baseline)
         f = np.fft.fft2(gray)
         fshift = np.fft.fftshift(f)
         magnitude_spectrum = 20 * np.log(np.abs(fshift) + 1e-8)
-
-        # Variance of frequency magnitude
         freq_var = float(np.var(magnitude_spectrum))
+        fft_score = min(1.0, max(0.0, freq_var / 300.0))
 
-        # Heuristic mapping to liveness confidence (higher natural texture variance -> higher score)
-        score = min(1.0, max(0.0, freq_var / 300.0))
-        return score
+        if self.anti_spoof is not None:
+            # AntiSpoofEngine handles its own fallback internally
+            dl_score = self.anti_spoof.predict(frame)
+            w = settings.ANTI_SPOOF_ENSEMBLE_WEIGHT
+            ensemble_score = (1.0 - w) * fft_score + w * dl_score
+            logger.debug(f"[LIVENESS] Passive frame: fft={fft_score:.3f} dl={dl_score:.3f} ensemble={ensemble_score:.3f}")
+            return ensemble_score
+
+        return fft_score
 
     def _verify_active_gestures(self, frames: List[np.ndarray], expected_gestures: List[str]) -> Tuple[bool, List[str]]:
         """
