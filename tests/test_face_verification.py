@@ -1,7 +1,7 @@
 import numpy as np
 import pytest
 from config import settings
-from services.face_verification import (
+from core.face_verification import (
     CardFaceExtractor,
     SelfieFaceExtractor,
     FaceQualityService,
