@@ -10,7 +10,7 @@ from ocr import (
     OCRText,
     normalize_unicode,
 )
-from schemas.card import ExtractedCardData, QualityChecks, FieldMetadata
+from schemas.card import ExtractedCardData, QualityChecks, FieldMetadata, CrossValidationResult
 from utils.image_utils import check_image_quality
 from utils.logger import logger
 
@@ -25,15 +25,35 @@ class CardProcessor:
         self.cross_validator = CrossValidator()
 
     def process(
-        self, front_image: np.ndarray, back_image: np.ndarray
-    ) -> Tuple[str, float, ExtractedCardData, Optional[Dict[str, Any]], Optional[Dict[str, Any]], QualityChecks, List[FieldMetadata]]:
-        # 1. Quality Checks
+        self, front_image: np.ndarray, back_image: Optional[np.ndarray] = None
+    ) -> Tuple[
+        bool,
+        str,
+        float,
+        ExtractedCardData,
+        Optional[Dict[str, Any]],
+        Optional[Dict[str, Any]],
+        CrossValidationResult,
+        QualityChecks,
+        List[FieldMetadata],
+        List[str]
+    ]:
+        # 1. Quality Checks for both front and back images
         is_blur_f, has_glare_f, is_cropped_f = check_image_quality(front_image)
-        quality_checks = QualityChecks(isBlur=is_blur_f, hasGlare=has_glare_f, isCropped=is_cropped_f)
+        if back_image is not None and back_image.size > 0:
+            is_blur_b, has_glare_b, is_cropped_b = check_image_quality(back_image)
+        else:
+            is_blur_b, has_glare_b, is_cropped_b = False, False, False
+
+        quality_checks = QualityChecks(
+            isBlur=is_blur_f or is_blur_b,
+            hasGlare=has_glare_f or has_glare_b,
+            isCropped=is_cropped_f or is_cropped_b
+        )
 
         # 2. OCR Token Detection
         front_tokens: List[OCRText] = self.ocr_engine.detect_tokens(front_image) if self.ocr_engine else []
-        back_tokens: List[OCRText] = self.ocr_engine.detect_tokens(back_image) if self.ocr_engine else []
+        back_tokens: List[OCRText] = self.ocr_engine.detect_tokens(back_image) if (self.ocr_engine and back_image is not None and back_image.size > 0) else []
 
         logger.info(f"[OCR_FRONT_TOKENS] count={len(front_tokens)}")
         logger.info(f"[OCR_BACK_TOKENS] count={len(back_tokens)}")
@@ -46,12 +66,12 @@ class CardProcessor:
 
         # 4. QR Parser
         qr_data = self.qr_engine.decode(front_image) if self.qr_engine else None
-        if not qr_data and self.qr_engine:
+        if not qr_data and self.qr_engine and back_image is not None and back_image.size > 0:
             qr_data = self.qr_engine.decode(back_image)
 
         # 5. MRZ Parser
         back_text_lines = [t.text for t in back_tokens]
-        mrz_data = self.mrz_engine.parse(back_text_lines) if self.mrz_engine else None
+        mrz_data = self.mrz_engine.parse(back_text_lines) if (self.mrz_engine and back_text_lines) else None
 
         # 6. Card Type Classifier
         card_type, card_type_confidence = self.card_classifier.classify(
@@ -65,4 +85,15 @@ class CardProcessor:
             all_ocr_fields, qr_data, mrz_data, card_type
         )
 
-        return card_type, card_type_confidence, final_data, qr_data, mrz_data, quality_checks, field_metadata
+        return (
+            card_verified,
+            card_type,
+            card_type_confidence,
+            final_data,
+            qr_data,
+            mrz_data,
+            cross_val_result,
+            quality_checks,
+            field_metadata,
+            errors
+        )

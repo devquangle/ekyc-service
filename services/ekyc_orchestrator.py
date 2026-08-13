@@ -49,25 +49,34 @@ class EkycOrchestrator:
                 errors=["INVALID_IMAGE_FORMAT"]
             )
 
-        card_type, card_type_conf, extracted_data, qr_data, mrz_data, quality_checks, field_metadata = self.card_processor.process(front_img, back_img)
+        (
+            card_verified,
+            card_type,
+            card_type_conf,
+            extracted_data,
+            qr_data,
+            mrz_data,
+            cross_val_result,
+            quality_checks,
+            field_metadata,
+            proc_errors
+        ) = self.card_processor.process(front_img, back_img)
 
-        card_verified, cross_val_result, val_errors = self.card_validator.validate(
-            extracted_data, qr_data, mrz_data, card_type
-        )
-
-        all_errors = val_errors
+        all_errors = proc_errors[:]
         if quality_checks.isBlur:
             all_errors.append("CARD_BLURRY")
 
+        unique_errors = list(dict.fromkeys(all_errors))
+
         return CardProcessResponse(
-            cardVerified=card_verified and len(all_errors) == 0,
+            cardVerified=card_verified and len(unique_errors) == 0,
             cardType=card_type,
             cardTypeConfidence=card_type_conf,
             extractedData=extracted_data,
             crossValidation=cross_val_result,
             qualityChecks=quality_checks,
             fieldMetadata=field_metadata,
-            errors=all_errors
+            errors=unique_errors
         )
 
     def verify_face(
