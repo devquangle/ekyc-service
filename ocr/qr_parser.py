@@ -8,7 +8,7 @@ from utils.logger import logger
 class QrParser:
     """
     Decodes QR Code from Vietnamese CCCD front/back card images using multi-step cropping,
-    grayscale enhancement, CLAHE/Thresholding, and multiple QR decoding engines.
+    grayscale enhancement, CLAHE/Thresholding, 180-degree rotation fallbacks, and multiple QR decoding engines.
     """
 
     def __init__(self):
@@ -63,18 +63,18 @@ class QrParser:
         return None
 
     def _try_detect_qr(self, image: np.ndarray) -> Optional[str]:
-        # Step 1: Decode on full original image
-        res = self._decode_image_variants(image)
-        if res:
-            return res
+        # Step 1: Decode on full original image (applies to any card side, any position)
+        res_full = self._decode_image_variants(image)
+        if res_full:
+            return res_full
 
-        # Step 2: Crop top-right QR Code ROI (front side CCCD: y:0-45%, x:50-100%)
+        # Step 2: Crop top-right QR Code ROI [0:45%H, 50%W:100%W]
         h, w = image.shape[:2]
         qr_crop = image[0:int(h * 0.45), int(w * 0.50):w]
         if qr_crop.size == 0:
             return None
 
-        # Step 3: Preprocess qr_crop (Grayscale, 2x Resize, Adaptive Threshold & CLAHE)
+        # Step 3: Preprocess qr_crop (Grayscale, 2x Resize CUBIC, CLAHE contrast enhancement)
         gray = cv2.cvtColor(qr_crop, cv2.COLOR_BGR2GRAY) if len(qr_crop.shape) == 3 else qr_crop
         resized = cv2.resize(gray, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
 
@@ -85,8 +85,14 @@ class QrParser:
             resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
         )
 
-        # Step 4: Attempt decode on preprocessed variants
-        for variant in [resized, enhanced_clahe, adaptive_thresh]:
+        # Step 4: Rotation & Otsu Thresholding Fallbacks
+        rotated_180 = cv2.rotate(resized, cv2.ROTATE_180)
+        _, otsu_thresh = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        variants = [resized, enhanced_clahe, adaptive_thresh, rotated_180, otsu_thresh]
+
+        # Sequentially attempt decoding on preprocessed variants
+        for variant in variants:
             res_crop = self._decode_image_variants(variant)
             if res_crop:
                 return res_crop

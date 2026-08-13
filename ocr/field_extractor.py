@@ -416,39 +416,58 @@ class FieldExtractor:
 
         gathered_tokens: List[OCRText] = []
         search_text = kw_line.text
-
-        # 1. Inline pattern scan directly on kw_line.text for DD/MM/YYYY or DD-MM-YYYY
-        inline_match = re.search(
-            r'\b([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b',
-            kw_line.text
-        )
         parsed = None
+
+        DATE_PATTERN = r'\b([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b'
+
+        # 1. Inline pattern scan directly on kw_line.text
+        inline_match = re.search(DATE_PATTERN, kw_line.text)
         if inline_match:
             raw_inline = inline_match.group(0)
             parsed = parse_date(raw_inline)
             if parsed:
                 gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
 
-        # 2. Try parsing kw_line.text directly if inline pattern wasn't distinct
+        # 2. Try parse_date() on the full kw_line.text
         if not parsed:
             parsed = parse_date(kw_line.text)
             if parsed:
                 gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
 
-        # 3. If kw_line does NOT contain a valid date, check kw_idx + 1 line
-        if not parsed and kw_idx + 1 < len(layout_lines):
-            next_line = layout_lines[kw_idx + 1]
-            if not self._is_keyword_line(next_line):
-                search_text = kw_line.text + " " + next_line.text
-                parsed = parse_date(search_text)
-                if parsed:
+        # 3. Scan up to 3 next lines (dateOfIssue on back of CCCD may be separated from the label)
+        if not parsed:
+            max_lookahead = 3 if field_name == "dateOfIssue" else 1
+            for offset in range(1, max_lookahead + 1):
+                next_idx = kw_idx + offset
+                if next_idx >= len(layout_lines):
+                    break
+                next_line = layout_lines[next_idx]
+                # Stop if we hit another field label (except same field)
+                if self._is_keyword_line(next_line, exclude_field=field_name):
+                    break
+                combined = kw_line.text + " " + next_line.text
+                next_match = re.search(DATE_PATTERN, next_line.text)
+                if next_match:
+                    raw_next = next_match.group(0)
+                    parsed = parse_date(raw_next)
+                    if parsed:
+                        search_text = combined
+                        gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
+                        gathered_tokens.extend(next_line.tokens)
+                        break
+                # Also try parse_date on combined
+                parsed_combined = parse_date(combined)
+                if parsed_combined:
+                    parsed = parsed_combined
+                    search_text = combined
                     gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
                     gathered_tokens.extend(next_line.tokens)
+                    break
 
         if not parsed:
             return None
 
-        match = re.search(r'\b([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b', search_text)
+        match = re.search(DATE_PATTERN, search_text)
         raw_date_str = match.group(0) if match else parsed
 
         logger.info(f"[FIELD_EXTRACTOR] {field_name} raw='{raw_date_str}' iso='{parsed}'")

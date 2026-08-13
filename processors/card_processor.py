@@ -117,9 +117,10 @@ class CardProcessor:
 
             all_ocr_fields = {**back_fields, **front_fields}
 
-            # 4. QR Parser
+            # 4. QR Parser (Scan front_image first, fallback to back_image)
             qr_data = self.qr_engine.decode(front_image) if self.qr_engine else None
             if not qr_data and self.qr_engine and back_image is not None and back_image.size > 0:
+                logger.info("[CARD_PROCESSOR] Front image QR null or unreadable. Executing back image QR scan fallback...")
                 qr_data = self.qr_engine.decode(back_image)
 
             # 5. MRZ Parser
