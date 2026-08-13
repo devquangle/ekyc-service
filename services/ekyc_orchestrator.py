@@ -19,7 +19,7 @@ from utils.image_utils import decode_image_bytes
 class EkycOrchestrator:
     """
     Main High-Level Orchestrator executing the complete 8-step eKYC pipeline
-    and applying the Final Decision Logic Gate.
+    with Fail-Fast optimization and strict exception handling.
     """
 
     def __init__(
@@ -127,53 +127,79 @@ class EkycOrchestrator:
         video_bytes: Optional[bytes] = None
     ) -> FullEkycResponse:
         """
-        Executes Full Orchestrated eKYC Pipeline.
+        Executes Full Orchestrated eKYC Pipeline with Fail-Fast resource protection and try-except error handling.
         """
         start_time = time.time()
         request_id = str(uuid.uuid4())
         failure_reasons = []
 
-        # Step 1: Card Process
-        card_res = self.process_card(front_bytes, back_bytes)
-        if not card_res.cardVerified:
-            failure_reasons.extend(card_res.errors)
+        try:
+            # Step 1: Card Processing & Validation
+            card_res = self.process_card(front_bytes, back_bytes)
+            if not card_res.cardVerified:
+                failure_reasons.extend(card_res.errors)
+                unique_failures = list(dict.fromkeys(failure_reasons))
+                exec_time_ms = round((time.time() - start_time) * 1000, 2)
+                logger.info(f"[FULL_EKYC] Short-circuiting due to unverified card: {unique_failures}")
+                return FullEkycResponse(
+                    requestId=request_id,
+                    status="SUCCESS",
+                    ekycResult="EKYC_NOT_VERIFIED",
+                    executionTimeMs=exec_time_ms,
+                    cardResult=card_res,
+                    faceResult=None,
+                    livenessResult=None,
+                    failureReasons=unique_failures
+                )
 
-        # Step 2: Face Verification
-        if selfie_bytes:
-            face_res = self.verify_face(front_bytes, selfie_bytes)
-        else:
-            face_res = FaceVerifyResponse(faceVerified=False, errors=["SELFIE_MISSING"])
+            # Step 2: Face Verification
+            if selfie_bytes:
+                face_res = self.verify_face(front_bytes, selfie_bytes)
+            else:
+                face_res = FaceVerifyResponse(faceVerified=False, errors=["SELFIE_MISSING"])
 
-        if not face_res.faceVerified:
-            failure_reasons.extend(face_res.errors)
+            if not face_res.faceVerified:
+                failure_reasons.extend(face_res.errors)
 
-        # Step 3: Video Liveness (Strict verification - No default bypass)
-        if video_bytes and len(video_bytes) > 0:
-            liveness_res = self.detect_liveness(video_bytes)
-        else:
-            liveness_res = LivenessResponse(
-                livenessVerified=False,
-                livenessScore=0.0,
-                errors=["VIDEO_MISSING"]
+            # Step 3: Video Liveness (Strict verification - No default bypass)
+            if video_bytes and len(video_bytes) > 0:
+                liveness_res = self.detect_liveness(video_bytes)
+            else:
+                liveness_res = LivenessResponse(
+                    livenessVerified=False,
+                    livenessScore=0.0,
+                    errors=["VIDEO_MISSING"]
+                )
+
+            if not liveness_res.livenessVerified:
+                failure_reasons.extend(liveness_res.errors)
+
+            # Final Decision Logic Gate: CARD && FACE && LIVENESS
+            is_ekyc_verified = card_res.cardVerified and face_res.faceVerified and liveness_res.livenessVerified
+            ekyc_result_str = "EKYC_VERIFIED" if is_ekyc_verified else "EKYC_NOT_VERIFIED"
+            exec_time_ms = round((time.time() - start_time) * 1000, 2)
+            unique_failures = list(dict.fromkeys(failure_reasons))
+
+            return FullEkycResponse(
+                requestId=request_id,
+                status="SUCCESS",
+                ekycResult=ekyc_result_str,
+                executionTimeMs=exec_time_ms,
+                cardResult=card_res,
+                faceResult=face_res,
+                livenessResult=liveness_res,
+                failureReasons=unique_failures
             )
-
-        if not liveness_res.livenessVerified:
-            failure_reasons.extend(liveness_res.errors)
-
-        # Final Decision Logic Gate: CARD && FACE && LIVENESS
-        is_ekyc_verified = card_res.cardVerified and face_res.faceVerified and liveness_res.livenessVerified
-
-        ekyc_result_str = "EKYC_VERIFIED" if is_ekyc_verified else "EKYC_NOT_VERIFIED"
-
-        execution_time_ms = round((time.time() - start_time) * 1000, 2)
-
-        return FullEkycResponse(
-            requestId=request_id,
-            status="SUCCESS",
-            ekycResult=ekyc_result_str,
-            executionTimeMs=execution_time_ms,
-            cardResult=card_res,
-            faceResult=face_res,
-            livenessResult=liveness_res,
-            failureReasons=list(dict.fromkeys(failure_reasons))
-        )
+        except Exception as e:
+            logger.error(f"[FULL_EKYC] Pipeline execution exception: {str(e)}", exc_info=True)
+            exec_time_ms = round((time.time() - start_time) * 1000, 2)
+            return FullEkycResponse(
+                requestId=request_id,
+                status="FAILED",
+                ekycResult="EKYC_NOT_VERIFIED",
+                executionTimeMs=exec_time_ms,
+                cardResult=None,
+                faceResult=None,
+                livenessResult=None,
+                failureReasons=[str(e)]
+            )
