@@ -41,7 +41,7 @@ def test_field_extractor_full_name():
     assert "fullName" in fields
     assert fields["fullName"].value == "TRAN THI UT"
     assert fields["fullName"].rawText == "TRẦN THỊ ÚT"
-    assert fields["fullName"].bbox == [[100.0, 100.0], [450.0, 100.0], [450.0, 125.0], [100.0, 125.0]]
+    assert fields["fullName"].bbox == [[310.0, 100.0], [450.0, 100.0], [450.0, 125.0], [310.0, 125.0]]
 
 
 def test_merged_bbox_calculation():

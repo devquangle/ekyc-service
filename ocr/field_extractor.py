@@ -95,9 +95,32 @@ class FieldExtractor:
 
         return extracted
 
+    def _get_value_tokens(self, line: LayoutLine, field_name: str) -> List[OCRText]:
+        """
+        Strips header label tokens from a line and returns only tokens belonging to the actual field value.
+        """
+        if not line or not line.tokens:
+            return []
+
+        inline_val = self._strip_header_label(line.text, field_name)
+        if not inline_val or inline_val == line.text:
+            return line.tokens
+
+        val_words = [w for w in re.split(r'\W+', remove_vietnamese_accents(inline_val).lower()) if w]
+        if not val_words:
+            return line.tokens
+
+        val_tokens = []
+        for token in line.tokens:
+            tok_words = [w for w in re.split(r'\W+', remove_vietnamese_accents(token.text).lower()) if w]
+            if any(w in val_words for w in tok_words):
+                val_tokens.append(token)
+
+        return val_tokens if val_tokens else line.tokens
+
     def _compute_merged_bbox(self, tokens: List[OCRText]) -> Optional[List[List[float]]]:
         """
-        Calculates a merged union bounding box covering all tokens belonging to an extracted field.
+        Calculates a merged union bounding box covering all tokens belonging to an extracted field value.
         Returns [[min_x, min_y], [max_x, min_y], [max_x, max_y], [min_x, max_y]] or None.
         """
         if not tokens:
@@ -180,7 +203,8 @@ class FieldExtractor:
         best_score, best_id, best_raw, best_line = candidates[0]
 
         kw_text = kw_info[1].text if kw_info else "Số / No."
-        merged_bbox = self._compute_merged_bbox(best_line.tokens)
+        val_tokens = self._get_value_tokens(best_line, "identityNumber")
+        merged_bbox = self._compute_merged_bbox(val_tokens)
 
         return ExtractedField(
             fieldName="identityNumber",
@@ -209,12 +233,12 @@ class FieldExtractor:
         inline_val = self._strip_header_label(kw_line.text, "fullName")
         if inline_val and len(inline_val) > 2:
             raw_name = inline_val
-            field_tokens = kw_line.tokens
+            field_tokens = self._get_value_tokens(kw_line, "fullName")
         elif kw_idx + 1 < len(layout_lines):
             next_line = layout_lines[kw_idx + 1]
             if not self._is_keyword_line(next_line):
                 raw_name = next_line.text
-                field_tokens = next_line.tokens
+                field_tokens = self._get_value_tokens(next_line, "fullName")
 
         if not raw_name:
             return None
@@ -272,7 +296,8 @@ class FieldExtractor:
 
         logger.info(f"[FIELD_EXTRACTOR] gender raw='{raw_gender_str}' normalized='{norm_gender}'")
 
-        merged_bbox = self._compute_merged_bbox(target_line.tokens) if target_line else None
+        val_tokens = self._get_value_tokens(target_line, "gender") if target_line else []
+        merged_bbox = self._compute_merged_bbox(val_tokens)
 
         return ExtractedField(
             fieldName="gender",
@@ -296,7 +321,7 @@ class FieldExtractor:
 
         if kw_info:
             kw_idx, kw_line, kw_str = kw_info
-            field_tokens = kw_line.tokens
+            field_tokens = self._get_value_tokens(kw_line, "nationality")
             inline_val = self._strip_header_label(kw_line.text, "nationality")
             if inline_val and len(inline_val) >= 3:
                 raw_nat = inline_val
@@ -331,7 +356,7 @@ class FieldExtractor:
         inline_val = self._strip_header_label(kw_line.text, field_name)
         if inline_val and len(inline_val) > 1:
             gathered_text_parts.append(inline_val)
-            gathered_tokens.extend(kw_line.tokens)
+            gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
 
         for j in range(kw_idx + 1, len(layout_lines)):
             line = layout_lines[j]
@@ -380,19 +405,23 @@ class FieldExtractor:
 
         kw_idx, kw_line, kw_str = kw_info
 
-        collected_lines = [kw_line]
+        gathered_tokens: List[OCRText] = []
         search_text = kw_line.text
 
         # 1. First attempt to parse date directly from the keyword line
         parsed = parse_date(kw_line.text)
+        if parsed:
+            gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
 
         # 2. If kw_line does NOT contain a valid date, try checking kw_idx + 1 line
         if not parsed and kw_idx + 1 < len(layout_lines):
             next_line = layout_lines[kw_idx + 1]
             if not self._is_keyword_line(next_line):
-                collected_lines.append(next_line)
                 search_text = kw_line.text + " " + next_line.text
                 parsed = parse_date(search_text)
+                if parsed:
+                    gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
+                    gathered_tokens.extend(next_line.tokens)
 
         if not parsed:
             return None
@@ -402,8 +431,7 @@ class FieldExtractor:
 
         logger.info(f"[FIELD_EXTRACTOR] {field_name} raw='{raw_date_str}' iso='{parsed}'")
 
-        field_tokens = [t for line in collected_lines for t in line.tokens]
-        merged_bbox = self._compute_merged_bbox(field_tokens)
+        merged_bbox = self._compute_merged_bbox(gathered_tokens)
 
         return ExtractedField(
             fieldName=field_name,
