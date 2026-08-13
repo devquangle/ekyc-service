@@ -17,7 +17,7 @@ class CardProcessor:
     """
     Primary Data Extraction Orchestrator for Card Processing.
     Collects raw data across OCR, QR, and MRZ engines, performs image quality checks,
-    classifies card type, and returns structured extracted data for validation.
+    classifies card type, and returns structured extracted data with MRZ/QR fallbacks for validation.
     """
 
     def __init__(self, ocr_engine: OcrEngine, qr_engine: QrEngine, mrz_engine: MrzEngine):
@@ -26,6 +26,34 @@ class CardProcessor:
         self.mrz_engine = mrz_engine
         self.field_extractor = FieldExtractor()
         self.card_classifier = CardTypeClassifier()
+
+    def _get_field_val_with_fallback(
+        self,
+        all_ocr_fields: Dict[str, Any],
+        qr_data: Optional[Dict[str, Any]],
+        mrz_data: Optional[Dict[str, Any]],
+        field_name: str
+    ) -> Optional[str]:
+        """
+        Fallback Priority for ExtractedCardData:
+        1. OCR extracted value
+        2. QR decoded value
+        3. MRZ parsed value
+        """
+        # 1. OCR primary
+        ocr_ext = all_ocr_fields.get(field_name)
+        if ocr_ext and ocr_ext.value:
+            return ocr_ext.value
+
+        # 2. QR secondary
+        if qr_data and qr_data.get(field_name):
+            return qr_data.get(field_name)
+
+        # 3. MRZ tertiary
+        if mrz_data and mrz_data.get(field_name):
+            return mrz_data.get(field_name)
+
+        return None
 
     def process(
         self, front_image: np.ndarray, back_image: Optional[np.ndarray] = None
@@ -95,17 +123,17 @@ class CardProcessor:
 
             logger.info(f"[CARD_PROCESSOR] Classified Card Type: {card_type} (conf={card_type_confidence})")
 
-            # 7. Construct ExtractedCardData & FieldMetadata
+            # 7. Construct ExtractedCardData with Fallback Priority (OCR -> QR -> MRZ)
             extracted_data = ExtractedCardData(
-                identityNumber=all_ocr_fields.get("identityNumber").value if all_ocr_fields.get("identityNumber") else None,
-                fullName=all_ocr_fields.get("fullName").value if all_ocr_fields.get("fullName") else None,
-                dateOfBirth=all_ocr_fields.get("dateOfBirth").value if all_ocr_fields.get("dateOfBirth") else None,
-                gender=all_ocr_fields.get("gender").value if all_ocr_fields.get("gender") else None,
-                nationality=all_ocr_fields.get("nationality").value if all_ocr_fields.get("nationality") else None,
-                placeOfOrigin=all_ocr_fields.get("placeOfOrigin").value if all_ocr_fields.get("placeOfOrigin") else None,
-                placeOfResidence=all_ocr_fields.get("placeOfResidence").value if all_ocr_fields.get("placeOfResidence") else None,
-                dateOfIssue=all_ocr_fields.get("dateOfIssue").value if all_ocr_fields.get("dateOfIssue") else None,
-                dateOfExpiry=all_ocr_fields.get("dateOfExpiry").value if all_ocr_fields.get("dateOfExpiry") else None,
+                identityNumber=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "identityNumber"),
+                fullName=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "fullName"),
+                dateOfBirth=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "dateOfBirth"),
+                gender=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "gender"),
+                nationality=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "nationality"),
+                placeOfOrigin=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "placeOfOrigin"),
+                placeOfResidence=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "placeOfResidence"),
+                dateOfIssue=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "dateOfIssue"),
+                dateOfExpiry=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "dateOfExpiry"),
             )
 
             field_metadata = [
