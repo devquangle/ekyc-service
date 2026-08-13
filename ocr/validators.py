@@ -43,6 +43,10 @@ class CardTypeClassifier:
             score_new += 0.25
         if "bo cong an" in back_text or "ministry of public security" in back_text:
             score_new += 0.20
+        # CCCD_NEW has no MRZ indicator — presence of MRZ-type content reduces new score
+        has_mrz_indicator = any(t for t in back_tokens if len(t.text) >= 30 and "<" in t.text)
+        if has_mrz_indicator:
+            score_new -= 0.30
 
         # OLD CARD Distinctive Indicators (CCCD 12-digit without chip / 9-digit CMND)
         if "can cuoc cong dan" in front_text:
@@ -53,6 +57,8 @@ class CardTypeClassifier:
             score_old += 0.35
         if "noi thuong tru" in front_text:
             score_old += 0.35
+        if has_mrz_indicator:
+            score_old += 0.30
 
         logger.info(f"[CARD_CLASSIFIER] New Score: {score_new:.2f}, Old Score: {score_old:.2f}")
 
@@ -211,17 +217,30 @@ class CrossValidator:
         )
 
         has_valid_qr = (qr_data is not None and ocr_match_qr is True)
-        mrz_pass_or_qr_override = mrz_valid or has_valid_qr
+        is_cccd_new = (card_type == "CCCD_NEW" or mrz_data is None)
+        has_valid_ocr = (final_card_data.identityNumber is not None and final_card_data.fullName is not None)
 
-        card_verified = (
-            card_type != "UNKNOWN"
-            and not is_expired
-            and final_card_data.identityNumber is not None
-            and final_card_data.fullName is not None
-            and mrz_pass_or_qr_override
-            and ocr_match_qr is not False
-            and (has_valid_qr or ocr_match_mrz is not False)
-        )
+        if is_cccd_new:
+            # CCCD_NEW (2024) has no MRZ: verify via QR match or OCR alone
+            card_verified = (
+                card_type != "UNKNOWN"
+                and not is_expired
+                and has_valid_ocr
+                and ocr_match_qr is not False
+            )
+            logger.info(f"[CROSS_VAL] CCCD_NEW path: verified={card_verified} (no MRZ required, qr_match={ocr_match_qr})")
+        else:
+            # CCCD_OLD: require MRZ or QR override
+            mrz_pass_or_qr_override = mrz_valid or has_valid_qr
+            card_verified = (
+                card_type != "UNKNOWN"
+                and not is_expired
+                and has_valid_ocr
+                and mrz_pass_or_qr_override
+                and ocr_match_qr is not False
+                and (has_valid_qr or ocr_match_mrz is not False)
+            )
+            logger.info(f"[CROSS_VAL] CCCD_OLD path: verified={card_verified} (mrz_valid={mrz_valid}, qr_match={ocr_match_qr}, mrz_match={ocr_match_mrz})")
 
         return card_verified, final_card_data, cross_val_result, field_metadata, errors
 

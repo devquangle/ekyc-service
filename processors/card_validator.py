@@ -103,19 +103,32 @@ class CardValidator:
             details=details
         )
 
-        # 7. Card Verification Decision Logic with QR Override Support
+        # 7. Card Verification Decision Logic
+        is_cccd_new = (card_type == "CCCD_NEW" or mrz_data is None)
         has_valid_qr = (qr_data is not None and ocr_match_qr is True)
-        mrz_pass_or_qr_override = mrz_valid or has_valid_qr
+        has_valid_ocr = (ocr_data.identityNumber is not None and ocr_data.fullName is not None)
 
-        card_verified = (
-            card_type != "UNKNOWN"
-            and not is_expired
-            and ocr_data.identityNumber is not None
-            and ocr_data.fullName is not None
-            and mrz_pass_or_qr_override
-            and ocr_match_qr is not False
-            and (has_valid_qr or ocr_match_mrz is not False)
-        )
+        if is_cccd_new:
+            # CCCD_NEW (2024) has no MRZ: verify via QR match or OCR alone
+            card_verified = (
+                card_type != "UNKNOWN"
+                and not is_expired
+                and has_valid_ocr
+                and ocr_match_qr is not False
+            )
+            logger.info(f"[CARD_VALIDATOR] CCCD_NEW path: verified={card_verified} (no MRZ required, qr_match={ocr_match_qr})")
+        else:
+            # CCCD_OLD: require MRZ or QR override
+            mrz_pass_or_qr_override = mrz_valid or has_valid_qr
+            card_verified = (
+                card_type != "UNKNOWN"
+                and not is_expired
+                and has_valid_ocr
+                and mrz_pass_or_qr_override
+                and ocr_match_qr is not False
+                and (has_valid_qr or ocr_match_mrz is not False)
+            )
+            logger.info(f"[CARD_VALIDATOR] CCCD_OLD path: verified={card_verified} (mrz_valid={mrz_valid}, qr_match={ocr_match_qr}, mrz_match={ocr_match_mrz})")
 
         return card_verified, cross_val_result, errors
 
