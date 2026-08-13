@@ -115,7 +115,16 @@ class CardProcessor:
             front_fields = self.field_extractor.extract_all_fields(front_tokens)
             back_fields = self.field_extractor.extract_all_fields(back_tokens)
 
-            all_ocr_fields = {**back_fields, **front_fields}
+            # Smart merge: front_fields takes priority; fallback to back_fields if front value is None
+            # This ensures CCCD_NEW address fields on the back side are not overwritten by empty front fields
+            all_ocr_fields: Dict[str, Any] = {**back_fields}
+            for field_name, front_ext in front_fields.items():
+                if front_ext and front_ext.value:
+                    all_ocr_fields[field_name] = front_ext
+                elif field_name not in all_ocr_fields or not (all_ocr_fields[field_name] and all_ocr_fields[field_name].value):
+                    all_ocr_fields[field_name] = front_ext
+
+            logger.info(f"[CARD_PROCESSOR] Merged OCR fields: front={list(front_fields.keys())} back={list(back_fields.keys())} merged={list(all_ocr_fields.keys())}")
 
             # 4. QR Parser (Scan front_image first, fallback to back_image)
             qr_data = self.qr_engine.decode(front_image) if self.qr_engine else None

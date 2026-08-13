@@ -361,11 +361,31 @@ class FieldExtractor:
             gathered_text_parts.append(inline_val)
             gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
 
-        stop_keywords = [
-            "noi thuong tru", "place of residence", "noi cu tru",
-            "co gia tri den", "date of expiry", "date expiry",
-            "bo cong an", "ministry"
-        ]
+        # Field-specific stop_keywords support both CCCD_OLD (front-side) and CCCD_NEW (back-side) layouts
+        if field_name == "placeOfResidence":
+            # placeOfResidence stops when hitting placeOfOrigin/birth-registration labels or expiry/authority
+            stop_keywords = [
+                "noi dang ky khai sinh", "place of birth registration",
+                "que quan", "place of origin",
+                "co gia tri den", "date of expiry", "date expiry",
+                "bo cong an", "ministry",
+                "ngay thang nam cap", "date month year"
+            ]
+        elif field_name == "placeOfOrigin":
+            # placeOfOrigin stops when hitting residence labels or issue-date/authority lines
+            stop_keywords = [
+                "noi thuong tru", "place of residence", "noi cu tru",
+                "co gia tri den", "date of expiry", "date expiry",
+                "ngay thang nam cap", "date month year",
+                "bo cong an", "ministry"
+            ]
+        else:
+            # Generic fallback for any future address-type field
+            stop_keywords = [
+                "noi thuong tru", "place of residence", "noi cu tru",
+                "co gia tri den", "date of expiry", "date expiry",
+                "bo cong an", "ministry"
+            ]
 
         for j in range(kw_idx + 1, len(layout_lines)):
             line = layout_lines[j]
