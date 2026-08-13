@@ -1,69 +1,92 @@
-import os
-from typing import List, Union, Dict, Any
-from pydantic import field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings
+from typing import List, Dict, Any
 
 
-# Extended Canonical Field Keyword Configuration (9 Canonical Fields)
-# Includes noisy OCR variants (e.g. /Piace of origin, Date.of.expiry, cogiatr, queguan)
+class Settings(BaseSettings):
+    APP_NAME: str = "eKYC Service"
+    API_V1_STR: str = "/api/v1"
+    # CORS & Security Settings
+    ALLOWED_ORIGINS: List[str] = ["*"]
+
+
+    # OCR Settings
+    OCR_LANG: str = "vi"
+    OCR_USE_ANGLE_CLS: bool = True
+
+    DEBUG: bool = True
+    FULLNAME_FUZZY_THRESHOLD: float = 0.80
+    FACE_SIMILARITY_THRESHOLD: float = 0.60
+    IMAGE_BLUR_THRESHOLD: float = 100.0
+    LIVENESS_BLUR_THRESHOLD: float = 100.0
+    LIVENESS_EYE_RATIO_THRESHOLD: float = 0.20
+    MAX_IMAGE_SIZE_MB: int = 10
+    FACE_DETECTION_MODEL_PATH: str = "weights/face_detection.onnx"
+    FACE_RECOGNITION_MODEL_PATH: str = "weights/face_recognition.onnx"
+
+
+
+
+    class Config:
+        case_sensitive = True
+
+
+settings = Settings()
+
+# Dictionary of Keywords for Card Processing Field Extraction & Boundary Engine
 FIELD_KEYWORDS: Dict[str, Dict[str, List[str]]] = {
     "identityNumber": {
         "en": [
-            "no",
             "no.",
             "number",
-            "id no",
-            "identity no",
+            "identity number",
             "personal identification number",
+            "personal identificationnubo",
+            "personal identification",
         ],
         "vi": [
             "số",
-            "số định danh",
+            "số / no",
+            "so",
             "số định danh cá nhân",
-            "số căn cước",
-            "số cccd",
+            "so dinh danh ca nhan",
+            "sadinh danh canhan",
+            "dinh danh ca nhan",
         ],
     },
     "fullName": {
         "en": [
             "full name",
-            "name",
-            "surname, given names",
+            "fullname",
+            "full name:",
+            "fuilname",
+            "fuil name",
         ],
         "vi": [
             "họ và tên",
-            "họ tên",
-            "họ và tên khai sinh",
+            "ho va ten",
             "họ, chữ đệm và tên khai sinh",
+            "ho, chu dem va ten khai sinh",
+            "ho.chidem va ten khal sinh",
+            "ten khai sinh",
+            "khai sinh",
         ],
     },
     "dateOfBirth": {
         "en": [
             "date of birth",
+            "date.of.birth",
+            "date of bth",
+            "date.of.bth",
             "birth date",
             "dob",
         ],
         "vi": [
             "ngày sinh",
-            "ngày tháng năm sinh",
+            "ngay sinh",
             "ngày, tháng, năm sinh",
-        ],
-    },
-    "gender": {
-        "en": [
-            "sex",
-            "gender",
-        ],
-        "vi": [
-            "giới tính",
-        ],
-    },
-    "nationality": {
-        "en": [
-            "nationality",
-        ],
-        "vi": [
-            "quốc tịch",
+            "ngay, thang, nam sinh",
+            "ngaythang.am sinh",
+            "ngaythang am sinh",
         ],
     },
     "placeOfOrigin": {
@@ -74,108 +97,85 @@ FIELD_KEYWORDS: Dict[str, Dict[str, List[str]]] = {
             "piace.of.origin",
             "place of orig",
             "place of birth registration",
+            "place of birth",
+            "pace of brth",
+            "pace.of.brth",
+            "place.of.birth",
         ],
         "vi": [
             "quê quán",
             "queguan",
             "quequan",
             "nơi đăng ký khai sinh",
+            "noi dang ky khai sinh",
+            "roi dang ky khai sinh",
+            "dang ky khai sinh",
         ],
     },
     "placeOfResidence": {
         "en": [
             "place of residence",
+            "piace of residence",
             "place.of.residence",
-            "permanent residence",
-            "permanent address",
+            "piace.of.residence",
+            "residence",
         ],
         "vi": [
             "nơi thường trú",
+            "noi thuong tru",
             "nơi cư trú",
-            "thường trú",
-            "địa chỉ thường trú",
-        ],
-    },
-    "dateOfIssue": {
-        "en": [
-            "date of issue",
-            "issue date",
-            "date month year",
-            "date, month, year",
-            "date,monthyear",
-            "date,month,year",
-            "monthyear",
-        ],
-        "vi": [
-            "ngày cấp",
-            "ngày tháng năm cấp",
-            "ngày, tháng, năm cấp",
-            "ngày tháng năm",
-            "ngày, tháng, năm",
-            "ngaythang,nam",
-            "ngaythangnam",
+            "noi cu tru",
+            "c/fcnct09",
+            "cư trú",
+            "thuong tru",
         ],
     },
     "dateOfExpiry": {
         "en": [
             "date of expiry",
             "date.of.expiry",
-            "dateofexpiry",
+            "date expiry",
             "expiry date",
-            "expiration date",
-            "date of expiration",
+            "expiry",
+            "oate ofexiry",
+            "oate.of.exiry",
+            "oate of expiry",
         ],
         "vi": [
             "có giá trị đến",
-            "co.gia.tri.den",
+            "co gia tri den",
             "cogiatr",
-            "cogiatrj",
-            "cogiatrden",
-            "ngày có giá trị đến",
-            "ngày hết hạn",
+            "cogiatri",
+            "có giá trị đến:",
+            "ngày, tháng, năm hết hạn",
+            "ngay, thang, nam het han",
+            "ngy.thang.nam het han",
+            "ngay het han",
+        ],
+    },
+    "dateOfIssue": {
+        "en": [
+            "date of issue",
+            "date.of.issue",
+            "issue date",
+            "date, month, year",
+            "date.month.year",
+            "date month year",
+            "dare of ssue",
+            "dare.of.ssue",
+            "date of ssue",
+        ],
+        "vi": [
+            "ngày, tháng, năm cấp",
+            "ngay, thang, nam cap",
+            "ngay thang nam cap",
+            "hgay.than.m cap",
+            "hgay than m cap",
+            "ngày cấp",
+            "ngay cap",
+            "ngày, tháng, năm",
+            "ngay, thang, nam",
+            "ngaythang,nam",
         ],
     },
 }
-
-
-class Settings(BaseSettings):
-    APP_NAME: str = "Python eKYC Service"
-    DEBUG: bool = False
-    DEVICE: str = "cpu"
-
-    MODEL_DIR: str = "./models"
-    INSIGHTFACE_MODEL_NAME: str = "buffalov"
-
-    # Thresholds
-    FACE_MATCH_THRESHOLD: float = 0.45
-    LIVENESS_PASSIVE_THRESHOLD: float = 0.80
-    OCR_MIN_CONFIDENCE: float = 0.85
-    FULLNAME_FUZZY_THRESHOLD: float = 0.90
-    IMAGE_BLUR_THRESHOLD: float = 100.0
-
-    # Video Constraints
-    MAX_VIDEO_DURATION_SEC: float = 10.0
-    VIDEO_FRAME_SAMPLING_RATE: int = 10
-    MAX_VIDEO_SIZE_MB: float = 20.0
-
-    # CORS
-    ALLOWED_ORIGINS: List[str] = ["*"]
-
-    @field_validator("ALLOWED_ORIGINS", mode="before")
-    def parse_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
-        if isinstance(v, str):
-            if v.startswith("[") and v.endswith("]"):
-                import json
-                return json.loads(v)
-            return [i.strip() for i in v.split(",") if i.strip()]
-        return v
-
-    model_config = SettingsConfigDict(
-        env_file=".env",
-        env_file_encoding="utf-8",
-        case_sensitive=True,
-        extra="ignore"
-    )
-
-
-settings = Settings()

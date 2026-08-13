@@ -29,7 +29,7 @@ class FieldMetadata(BaseModel):
     ocrLanguage: Optional[str] = Field(default=None, description="Language of matched OCR keyword")
 
 
-class FieldValidationDetail(BaseModel):
+class CrossValidationDetail(BaseModel):
     fieldName: str
     ocrValue: Optional[str] = None
     qrValue: Optional[str] = None
@@ -37,12 +37,16 @@ class FieldValidationDetail(BaseModel):
     status: str = "NOT_AVAILABLE"  # MATCH, MISMATCH, NOT_AVAILABLE
 
 
+FieldValidationDetail = CrossValidationDetail
+
+
 class CrossValidationResult(BaseModel):
     ocrMatchQr: Optional[bool] = None
     ocrMatchMrz: Optional[bool] = None
     mrzCheckDigitValid: Optional[bool] = None
     isExpired: Optional[bool] = None
-    details: List[FieldValidationDetail] = []
+    details: List[CrossValidationDetail] = []
+
 
 
 class QualityChecks(BaseModel):

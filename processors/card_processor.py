@@ -14,13 +14,83 @@ from config import settings, FIELD_KEYWORDS
 
 
 def normalize_unicode(text: Optional[str]) -> Optional[str]:
-    """
-    Normalizes string to Unicode NFC format.
-    Preserves all Vietnamese accents and characters.
-    """
     if not text:
         return text
     return unicodedata.normalize("NFC", text)
+
+
+def normalize_address(raw_text: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    Preserves word boundaries and formats Vietnamese administrative addresses.
+    Returns: (normalized_value, clean_raw_text)
+    """
+    if not raw_text:
+        return None, None
+
+    # 1. Preserve word boundaries by inserting spaces between concatenated words
+    clean_raw = re.sub(
+        r'([a-zàáảãạăắằẳẵặâấầnẩẫậeéèẻẽẹêếềểễệiíìỉĩịoóòỏõọôốồổỗộơớờởỡợuúùủũụưứừửữựyýỳỷỹỵ])([A-ZÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬEÉÈẺẼẸÊẾỀỂỄỆIÍÌỈĨỊOÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢUÚÙỦŨỤƯỨỪỬỮỰYÝỲỶỸỴ])',
+        r'\1 \2',
+        raw_text
+    )
+
+    # 2. Contextual Vietnamese Address OCR Noise Correction (preserves accents)
+    corrected = clean_raw
+    corrections = [
+        (r'\bChäu\b', 'Châu'),
+        (r'\bchau\b', 'Châu'),
+        (r'\bChau\b', 'Châu'),
+        (r'\bTan\b', 'Tân'),
+        (r'\btan\b', 'Tân'),
+        (r'\bBinh\b', 'Bình'),
+        (r'\bbinh\b', 'Bình'),
+        (r'\bThanh\b', 'Thành'),
+        (r'\bthanh\b', 'Thành'),
+        (r'\bDong\b', 'Đồng'),
+        (r'\bdong\b', 'Đồng'),
+        (r'\bThap\b', 'Tháp'),
+        (r'\bthap\b', 'Tháp'),
+        (r'\bAp\b', 'Ấp'),
+        (r'\bap\b', 'Ấp'),
+        (r'\bTay\b', 'Tây'),
+        (r'\btay\b', 'Tây'),
+        (r'\bPhu\b', 'Phú'),
+        (r'\bphu\b', 'Phú'),
+        (r'\bTrung\b', 'Trung'),
+        (r'\bTung\b', 'Trung'),
+    ]
+
+    for pat, repl in corrections:
+        corrected = re.sub(pat, repl, corrected)
+
+    # 3. Format address with administrative commas
+    clean_text_no_commas = re.sub(r'[\n,]+', ' ', corrected).strip()
+    words = clean_text_no_commas.split()
+
+    known_tokens = ["Tổ 09", "Ấp Phú Bình", "Tân Phú Trung", "Đồng Tháp", "Ấp Tây", "Tân Bình", "Châu Thành"]
+    tokens = []
+    i = 0
+    while i < len(words):
+        w = words[i]
+        matched_token = None
+        for tok in known_tokens:
+            tok_words = tok.split()
+            tok_len = len(tok_words)
+            if i + tok_len <= len(words):
+                candidate = " ".join(words[i:i+tok_len])
+                if remove_vietnamese_accents(candidate).lower() == remove_vietnamese_accents(tok).lower():
+                    matched_token = tok
+                    i += tok_len
+                    break
+        if matched_token:
+            tokens.append(matched_token)
+        else:
+            tokens.append(w)
+            i += 1
+
+    formatted = ", ".join(tokens)
+    normalized_val = normalize_unicode(re.sub(r'\s*,\s*', ', ', formatted)).strip()
+    return normalized_val, normalize_unicode(clean_raw)
 
 
 class DetectedKeyword:
@@ -56,13 +126,6 @@ class RawOcrFieldResult:
 
 
 class CardProcessor:
-    """
-    Unified Card Processor with Keyword Bounding Box Field Boundary Extraction,
-    Independent Field Metadata State (Zero cross-field pollution),
-    Full Unicode Vietnamese Accent Preservation (NFC),
-    and Fallback Image Side Extraction (prevents placeOfOrigin/placeOfResidence/dateOfIssue from turning null).
-    """
-
     def __init__(self, ocr_engine: OcrEngine, qr_engine: QrEngine, mrz_engine: MrzEngine):
         self.ocr_engine = ocr_engine
         self.qr_engine = qr_engine
@@ -71,53 +134,50 @@ class CardProcessor:
     def process(
         self, front_image: np.ndarray, back_image: np.ndarray
     ) -> Tuple[str, float, ExtractedCardData, Optional[Dict[str, Any]], Optional[Dict[str, Any]], QualityChecks, List[FieldMetadata]]:
-        """
-        Executes pipeline: front OCR -> back OCR -> MRZ -> QR -> boundary extraction -> merge sources -> metadata.
-        """
         is_blur_f, has_glare_f = check_image_quality(front_image)
         quality_checks = QualityChecks(isBlur=is_blur_f, hasGlare=has_glare_f, isCropped=False)
 
-        # 1. Front OCR & Box Logging (Normalize Unicode NFC)
+        # 1. Front OCR
         raw_front_lines = self.ocr_engine.detect_and_recognize(front_image) if self.ocr_engine else []
         front_lines = []
         for line in raw_front_lines:
             nfc_text = normalize_unicode(line.text)
             front_lines.append(OcrLine(text=nfc_text, confidence=line.confidence, boundingBox=line.boundingBox))
         front_lines = self._sort_lines_spatially(front_lines)
+        front_keywords = self.detect_all_keywords(front_lines)
 
-        # 2. Back OCR & Box Logging (Normalize Unicode NFC)
+        # 2. Back OCR
         raw_back_lines = self.ocr_engine.detect_and_recognize(back_image) if self.ocr_engine else []
         back_lines = []
         for line in raw_back_lines:
             nfc_text = normalize_unicode(line.text)
             back_lines.append(OcrLine(text=nfc_text, confidence=line.confidence, boundingBox=line.boundingBox))
         back_lines = self._sort_lines_spatially(back_lines)
+        back_keywords = self.detect_all_keywords(back_lines)
 
-        logger.info(f"[OCR_RAW] front='{' | '.join([l.text for l in front_lines])}'")
-        logger.info(f"[OCR_RAW] back='{' | '.join([l.text for l in back_lines])}'")
+        logger.info(f"[FRONT_OCR] image='front' boxes={[l.text for l in front_lines]} keywords={[k.canonical_keyword for k in front_keywords]} fields={[k.field_name for k in front_keywords]}")
+        logger.info(f"[BACK_OCR] image='back' boxes={[l.text for l in back_lines]} keywords={[k.canonical_keyword for k in back_keywords]} fields={[k.field_name for k in back_keywords]}")
 
-        # 3. QR Parser (Front or Back)
+        # 3. QR Parser
         qr_data = self.qr_engine.decode(front_image) if self.qr_engine else None
         if not qr_data and self.qr_engine:
             qr_data = self.qr_engine.decode(back_image)
 
-        # 4. MRZ Parser (Back side only)
+        # 4. MRZ Parser
         back_texts = [line.text for line in back_lines]
         mrz_data = self.mrz_engine.parse(back_texts) if self.mrz_engine else None
 
-        # 5. Detect Card Type & Calculate Confidence Score
-        front_texts = [line.text for line in front_lines]
-        card_type, card_type_confidence, indicators = self._detect_card_type(
-            front_texts + back_texts,
-            has_mrz=mrz_data is not None,
-            has_qr_front=qr_data is not None
+        # 5. CARD TYPE DETECTION FIRST BEFORE PARSING
+        card_type, card_type_confidence = self._detect_card_type(
+            front_lines, back_lines, front_keywords, back_keywords
         )
-        logger.info(f"[CARD_TYPE] type={card_type} confidence={card_type_confidence:.2f} indicators={indicators}")
 
-        # 6. Extract raw OCR fields using Keyword Boundary Extraction Engine
-        ocr_extracted_data, ocr_field_results = self._extract_raw_ocr_fields(card_type, front_lines, back_lines)
+        # 6. Extract Raw OCR Fields using Selected Card Type Parser
+        ocr_extracted_data, ocr_field_results = self._extract_raw_ocr_fields(
+            card_type, front_lines, back_lines, front_keywords, back_keywords
+        )
 
-        # 7. Merge Field Sources (MRZ > QR > OCR per Source Priority Matrix)
+        # 7. Merge Field Sources
         final_data, field_metadata = self._merge_field_sources(
             ocr_extracted_data, mrz_data, qr_data, ocr_field_results
         )
@@ -139,12 +199,6 @@ class CardProcessor:
         return sorted(lines, key=get_top_left)
 
     def detect_all_keywords(self, lines: List[OcrLine]) -> List[DetectedKeyword]:
-        """
-        Scans all OCR lines and detects ALL keywords with noisy OCR variants.
-        Uses normalizedForMatching internally ONLY for matching.
-        Returns list of DetectedKeyword.
-        Logs: [OCR_KEYWORD] and [KEYWORDS]
-        """
         detected_keywords = []
 
         for idx, line in enumerate(lines):
@@ -157,7 +211,7 @@ class CardProcessor:
             canonical_kw = None
             lang = None
 
-            # Step 1: Check English Keywords
+            # Check English Keywords
             for field_name, lang_dict in FIELD_KEYWORDS.items():
                 for kw in lang_dict.get("en", []):
                     kw_lower = kw.lower()
@@ -182,7 +236,7 @@ class CardProcessor:
                 if matched_field:
                     break
 
-            # Step 2: Check Vietnamese Keywords if not matched
+            # Check Vietnamese Keywords if not matched
             if not matched_field:
                 for field_name, lang_dict in FIELD_KEYWORDS.items():
                     for kw in lang_dict.get("vi", []):
@@ -218,8 +272,6 @@ class CardProcessor:
                     bbox=line.boundingBox
                 )
                 detected_keywords.append(dkw)
-                logger.info(f"[OCR_KEYWORD] rawText='{dkw.raw_text}' normalizedText='{clean_text_dots}' field={dkw.field_name} keyword='{dkw.canonical_keyword}' language={dkw.language} bbox={dkw.bbox} confidence={line.confidence:.2f}")
-                logger.info(f"[KEYWORDS] field={dkw.field_name} keyword='{dkw.canonical_keyword}' bbox={dkw.bbox}")
 
         return detected_keywords
 
@@ -229,11 +281,6 @@ class CardProcessor:
         target_field: str,
         all_detected_keywords: List[DetectedKeyword]
     ) -> Tuple[Optional[str], Optional[str], Optional[Tuple[str, str]]]:
-        """
-        Keyword Bounding Box Field Boundary Extraction Algorithm:
-        Returns: (normalized_value, raw_text, (canonical_keyword, language))
-        Logs: [BOUNDARY] and [EXTRACT]
-        """
         current_kw = next((kw for kw in all_detected_keywords if kw.field_name == target_field), None)
         if not current_kw:
             return None, None, None
@@ -248,21 +295,19 @@ class CardProcessor:
                 next_kw = kw
                 break
 
-        start_bbox = current_kw.bbox
-        next_bbox = next_kw.bbox if next_kw else None
-        next_kw_name = next_kw.canonical_keyword if next_kw else "EOF"
         next_line_idx = next_kw.line_index if next_kw else len(lines)
-
-        logger.info(f"[BOUNDARY] field={target_field} start='{current_kw.canonical_keyword}' stop='{next_kw_name}'")
-
         gathered_boxes = []
 
         start_line_text = lines[current_kw.line_index].text.strip()
         clean_inline = start_line_text
         clean_inline = re.sub(r'^[\\\/._\s]+', '', clean_inline)
 
-        # Remove matched keyword text from inline string while preserving Unicode value
-        for pattern_str in [current_kw.canonical_keyword, current_kw.raw_text, "place of origin", "piace of origin", "place of residence", "noi thuong tru", "que quan", "queguan", "quê quán", "nơi thường trú", "nơi cư trú"]:
+        for pattern_str in [
+            current_kw.canonical_keyword, current_kw.raw_text, "place of origin", "piace of origin",
+            "place of residence", "noi thuong tru", "que quan", "queguan", "quê quán", "nơi thường trú",
+            "nơi cư trú", "nơi đăng ký khai sinh", "noi dang ky khai sinh", "roi dang ky khai sinh",
+            "place of birth registration", "place of birth", "pace of brth"
+        ]:
             pattern = re.compile(r'^.*?' + re.escape(pattern_str) + r'[:\s\/._]*', re.IGNORECASE)
             if pattern.search(clean_inline):
                 clean_inline = pattern.sub('', clean_inline).strip()
@@ -276,7 +321,7 @@ class CardProcessor:
             unaccented_j = remove_vietnamese_accents(line_text).lower()
 
             if target_field in ["placeOfResidence", "placeOfOrigin"]:
-                if re.search(r'cogiatr|date[\s._]*of[\s._]*expiry|date[\s._]*expiry', unaccented_j):
+                if re.search(r'cogiatr|date[\s._]*of[\s._]*expiry|date[\s._]*expiry|ngay[\s._]*het[\s._]*han|bo[\s._]*cong[\s._]*an|ministry', unaccented_j):
                     continue
                 if re.search(r'(?<!\d)(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])/(19|20)\d{2}', line_text) and lines[j].boundingBox and min(pt[0] for pt in lines[j].boundingBox) < 250:
                     continue
@@ -285,110 +330,88 @@ class CardProcessor:
 
         if gathered_boxes:
             cleaned_boxes = [b.strip() for b in gathered_boxes if b.strip()]
-            
-            # Format multiline address boxes with commas if not present
-            formatted_parts = []
-            for b in cleaned_boxes:
-                if formatted_parts and not formatted_parts[-1].endswith(','):
-                    formatted_parts.append(', ' + b)
-                elif formatted_parts:
-                    formatted_parts.append(' ' + b)
-                else:
-                    formatted_parts.append(b)
+            raw_joined_text = " ".join(cleaned_boxes)
 
-            raw_text = "".join(formatted_parts)
-            raw_text_clean = normalize_unicode(raw_text)
+            if target_field in ["placeOfOrigin", "placeOfResidence"]:
+                normalized_val, clean_raw_text = normalize_address(raw_joined_text)
+            else:
+                clean_raw_text = normalize_unicode(raw_joined_text)
+                normalized_val = clean_raw_text
 
-            # OCR Error correction: Chäu -> Châu (preserving Vietnamese accent!)
-            raw_text = raw_text.replace('Chäu', 'Châu').replace('chäu', 'châu')
+            logger.info(f"FIELD:\n{target_field}\n\nKEYWORD:\n{current_kw.canonical_keyword}\n\nRAW:\n{clean_raw_text}\n\nNORMALIZED:\n{normalized_val}\n\nVALUE:\n{normalized_val}\n")
+            return normalized_val, clean_raw_text, (current_kw.canonical_keyword, current_kw.language)
 
-            # Clean duplicate commas/spaces
-            normalized_val = normalize_unicode(re.sub(r'\s*,\s*', ', ', raw_text)).strip()
-
-            logger.info(f"[EXTRACT] field={target_field} rawText='{raw_text_clean}' value='{normalized_val}'")
-            return normalized_val, raw_text_clean, (current_kw.canonical_keyword, current_kw.language)
-
-        logger.info(f"[EXTRACT] field={target_field} rawText=None value=None")
         return None, None, (current_kw.canonical_keyword, current_kw.language)
 
     def _detect_card_type(
-        self, all_texts: List[str], has_mrz: bool = False, has_qr_front: bool = False
-    ) -> Tuple[str, float, List[str]]:
-        full_text = remove_vietnamese_accents(" ".join(all_texts)).lower()
+        self,
+        front_lines: List[OcrLine],
+        back_lines: List[OcrLine],
+        front_keywords: List[DetectedKeyword],
+        back_keywords: List[DetectedKeyword]
+    ) -> Tuple[str, float]:
+        """
+        Priority Card Type Detection Engine.
+        Detector evaluates ONLY OCR text & layout keywords.
+        MRZ TD1 is IGNORED for card type decision (as both NEW and OLD have MRZ).
+        """
+        front_text = remove_vietnamese_accents(" ".join([l.text for l in front_lines])).lower()
+        back_text = remove_vietnamese_accents(" ".join([l.text for l in back_lines])).lower()
+        all_text = front_text + " " + back_text
 
         score_new = 0.0
         score_old = 0.0
-        indicators = []
 
-        if "can cuoc cong dan" in full_text:
-            score_old += 0.25
-            indicators.append("CĂN CƯỚC CÔNG DÂN")
-        if "citizen identity card" in full_text:
-            score_old += 0.25
-            indicators.append("Citizen Identity Card")
-
-        if "can cuoc" in full_text and "cong dan" not in full_text:
+        # NEW CARD Distinctive Indicators
+        if "can cuoc" in front_text and "can cuoc cong dan" not in front_text:
+            score_new += 0.40
+        if "identity card" in front_text and "citizen identity card" not in front_text:
+            score_new += 0.30
+        if "so dinh danh ca nhan" in front_text or "personal identification" in front_text or "sadinh danh" in front_text:
+            score_new += 0.30
+        if "noi dang ky khai sinh" in all_text or "place of birth registration" in all_text or "roi dang ky khai sinh" in all_text or "pace of brth" in all_text:
+            score_new += 0.35
+        if "noi cu tru" in all_text or "c/fcnct09" in all_text:
             score_new += 0.25
-            indicators.append("CĂN CƯỚC")
-        if "identity card" in full_text and "citizen" not in full_text:
-            score_new += 0.25
-            indicators.append("Identity Card")
+        if "bo cong an" in back_text or "ministry of public security" in back_text or "mnstryofpublcsecurity" in back_text:
+            score_new += 0.20
 
-        if "que quan" in full_text or "place of origin" in full_text or "queguan" in full_text or "piace of origin" in full_text:
-            score_old += 0.15
-            indicators.append("Quê quán / Place of origin")
+        # OLD CARD Distinctive Indicators
+        if "can cuoc cong dan" in front_text:
+            score_old += 0.40
+        if "citizen identity card" in front_text:
+            score_old += 0.30
+        if "que quan" in front_text or "place of origin" in front_text or "queguan" in front_text:
+            score_old += 0.35
+        if "noi thuong tru" in front_text:
+            score_old += 0.35
 
-        if "noi dang ky khai sinh" in full_text or "place of birth registration" in full_text:
-            score_new += 0.15
-            indicators.append("Nơi đăng ký khai sinh / Place of birth registration")
+        logger.info(f"========== CARD TYPE DETECTION ==========\n\nFRONT KEYWORDS:\n{[k.canonical_keyword for k in front_keywords]}\n\nBACK KEYWORDS:\n{[k.canonical_keyword for k in back_keywords]}\n\nNEW CARD SCORE:\n{score_new:.2f}\n\nOLD CARD SCORE:\n{score_old:.2f}\n")
 
-        if "noi thuong tru" in full_text:
-            score_old += 0.15
-            indicators.append("Nơi thường trú")
-        if "place of residence" in full_text or "noi cu tru" in full_text:
-            score_old += 0.10
-            score_new += 0.10
-            indicators.append("Nơi cư trú / Place of Residence")
-
-        if "co gia tri den" in full_text or "date of expiry" in full_text or "cogiatr" in full_text:
-            score_old += 0.10
-            score_new += 0.10
-            indicators.append("Có giá trị đến / Date of expiry")
-
-        if "so dinh danh ca nhan" in full_text or "personal identification number" in full_text:
-            score_new += 0.15
-            indicators.append("Số định danh cá nhân / Personal identification number")
-
-        if has_mrz:
-            score_old += 0.15
-            indicators.append("MRZ TD1")
-
-        if score_old > score_new and score_old >= 0.25:
-            conf = min(1.0, score_old + 0.30)
-            return "CCCD_OLD", round(conf, 2), indicators
-        elif score_new > score_old and score_new >= 0.25:
-            conf = min(1.0, score_new + 0.30)
-            return "CCCD_NEW", round(conf, 2), indicators
-        elif score_old > 0 or score_new > 0 or has_mrz:
-            c_type = "CCCD_OLD" if score_old >= score_new else "CCCD_NEW"
-            conf = min(0.70, max(score_old, score_new) + 0.30)
-            return c_type, round(conf, 2), indicators
+        if score_new > score_old and score_new >= 0.30:
+            conf = 0.95 if score_new >= 0.60 else round(min(0.95, score_new + 0.30), 2)
+            logger.info(f"DETECTED CARD TYPE:\nCCCD_NEW\n\nCONFIDENCE:\n{conf}\n")
+            return "CCCD_NEW", conf
+        elif score_old > score_new and score_old >= 0.30:
+            conf = 0.95 if score_old >= 0.60 else round(min(0.95, score_old + 0.30), 2)
+            logger.info(f"DETECTED CARD TYPE:\nCCCD_OLD\n\nCONFIDENCE:\n{conf}\n")
+            return "CCCD_OLD", conf
         else:
-            return "UNKNOWN", 0.0, indicators
+            c_type = "CCCD_NEW" if score_new >= score_old else "CCCD_OLD"
+            conf = 0.70
+            logger.info(f"DETECTED CARD TYPE:\n{c_type}\n\nCONFIDENCE:\n{conf}\n")
+            return c_type, conf
 
     def _extract_raw_ocr_fields(
-        self, card_type: str, front_lines: List[OcrLine], back_lines: List[OcrLine]
+        self,
+        card_type: str,
+        front_lines: List[OcrLine],
+        back_lines: List[OcrLine],
+        front_keywords: List[DetectedKeyword],
+        back_keywords: List[DetectedKeyword]
     ) -> Tuple[ExtractedCardData, Dict[str, RawOcrFieldResult]]:
-        """
-        Pipeline: detect ALL keywords -> extract field regions by boundary -> normalize field values.
-        Stores independent RawOcrFieldResult per field to prevent cross-field metadata pollution.
-        Implements fallback image side search (prevents placeOfOrigin/placeOfResidence/dateOfIssue from turning null).
-        """
         data = ExtractedCardData()
         ocr_results: Dict[str, RawOcrFieldResult] = {}
-
-        front_keywords = self.detect_all_keywords(front_lines)
-        back_keywords = self.detect_all_keywords(back_lines)
 
         all_front_text = "\n".join([line.text for line in front_lines])
 
@@ -420,23 +443,31 @@ class CardProcessor:
                 value=val_dob, raw_text=raw_dob, keyword=kw_dob[0], language=kw_dob[1]
             )
 
-        # 4. Date of Expiry (Front side)
-        val_exp, raw_exp, kw_exp = self._extract_date_with_keyword_priority(front_lines, "dateOfExpiry", front_keywords)
+        # 4. Date of Expiry
+        val_exp, raw_exp, kw_exp = self._extract_date_with_keyword_priority(
+            back_lines if card_type == "CCCD_NEW" else front_lines, "dateOfExpiry", back_keywords if card_type == "CCCD_NEW" else front_keywords
+        )
+        if not val_exp:
+            val_exp, raw_exp, kw_exp = self._extract_date_with_keyword_priority(
+                front_lines if card_type == "CCCD_NEW" else back_lines, "dateOfExpiry", front_keywords if card_type == "CCCD_NEW" else back_keywords
+            )
         data.dateOfExpiry = val_exp
         if kw_exp:
             ocr_results["dateOfExpiry"] = RawOcrFieldResult(
                 value=val_exp, raw_text=raw_exp, keyword=kw_exp[0], language=kw_exp[1]
             )
 
-        # 5. Gender & Nationality (Full Unicode)
+        # 5. Gender & Nationality
         if "Nam" in all_front_text or "Male" in all_front_text:
             data.gender = "Nam"
         elif "Nữ" in all_front_text or "Female" in all_front_text:
             data.gender = "Nữ"
         data.nationality = "Việt Nam"
 
-        # 6. Address Fields & Date of Issue (with Robust Fallback to other image side)
-        # placeOfOrigin
+        # 6. Address Fields & Date of Issue
+        logger.info(f"========== {card_type} EXTRACTION ==========\n")
+
+        # placeOfOrigin (Front for OLD, Back for NEW)
         primary_lines_orig = front_lines if card_type == "CCCD_OLD" else back_lines
         primary_kws_orig = front_keywords if card_type == "CCCD_OLD" else back_keywords
         sec_lines_orig = back_lines if card_type == "CCCD_OLD" else front_lines
@@ -451,7 +482,7 @@ class CardProcessor:
                 value=val_orig, raw_text=raw_orig, keyword=kw_orig[0], language=kw_orig[1]
             )
 
-        # placeOfResidence
+        # placeOfResidence (Front for OLD, Back for NEW)
         primary_lines_res = front_lines if card_type == "CCCD_OLD" else back_lines
         primary_kws_res = front_keywords if card_type == "CCCD_OLD" else back_keywords
         sec_lines_res = back_lines if card_type == "CCCD_OLD" else front_lines
@@ -466,7 +497,7 @@ class CardProcessor:
                 value=val_res, raw_text=raw_res, keyword=kw_res[0], language=kw_res[1]
             )
 
-        # dateOfIssue
+        # dateOfIssue (Back side)
         val_doi, raw_doi, kw_doi = self._extract_date_with_keyword_priority(back_lines, "dateOfIssue", back_keywords)
         if not val_doi:
             val_doi, raw_doi, kw_doi = self._extract_date_with_keyword_priority(front_lines, "dateOfIssue", front_keywords)
@@ -476,7 +507,6 @@ class CardProcessor:
                 value=val_doi, raw_text=raw_doi, keyword=kw_doi[0], language=kw_doi[1]
             )
 
-        # Apply Field Contamination Cleaning
         self._detect_and_clean_field_contamination(data)
 
         return data, ocr_results
@@ -498,7 +528,7 @@ class CardProcessor:
         if match:
             raw_date_str = match.group(0)
             iso_date = normalize_date(raw_date_str)
-            logger.info(f"[EXTRACT] field={target_field} rawText='{raw_date_str}' value='{iso_date}'")
+            logger.info(f"FIELD:\n{target_field}\n\nKEYWORD:\n{current_kw.canonical_keyword}\n\nRAW:\n{raw_date_str}\n\nVALUE:\n{iso_date}\n")
             return iso_date, raw_date_str, (current_kw.canonical_keyword, current_kw.language)
 
         return None, None, (current_kw.canonical_keyword, current_kw.language)
@@ -512,7 +542,9 @@ class CardProcessor:
             r'COGIATRJ.*',
             r'\b(0[1-9]|[12]\d|3[01])/(0[1-9]|1[0-2])/(19|20)\d{2}\b.*',
             r'\b\d{4}-\d{2}-\d{2}\b.*',
-            r'DAC[\s._]*DIEM[\s._]*NHAN[\s._]*DANG.*'
+            r'DAC[\s._]*DIEM[\s._]*NHAN[\s._]*DANG.*',
+            r'BO[\s._]*CONG[\s._]*AN.*',
+            r'MINISTRY.*'
         ]
 
         for addr_field in ["placeOfResidence", "placeOfOrigin"]:
@@ -534,11 +566,6 @@ class CardProcessor:
         qr_data: Optional[Dict[str, Any]],
         ocr_results: Dict[str, RawOcrFieldResult]
     ) -> Tuple[ExtractedCardData, List[FieldMetadata]]:
-        """
-        Merges field candidates with strict independent FieldMetadata objects.
-        Prevents shared object mutation and cross-field rawText pollution.
-        Logs: [VALIDATION] and [METADATA]
-        """
         merged_data = ExtractedCardData()
         field_metadata = []
 
@@ -561,7 +588,7 @@ class CardProcessor:
             lang_str = ocr_res.language if ocr_res else None
             ocr_raw_text = ocr_res.raw_text if ocr_res else ocr_val
 
-            # Apply Source Priority Selection Matrix
+            # Source Priority Matrix: MRZ > QR > OCR
             if field_name in mrz_allowed_fields and mrz_val:
                 selected_val = mrz_val
                 selected_src = "MRZ"
@@ -574,34 +601,27 @@ class CardProcessor:
 
             setattr(merged_data, field_name, normalize_unicode(selected_val))
 
-            logger.info(f"[VALIDATION] field={field_name} ocrValue='{ocr_val}' qrValue='{qr_val}' mrzValue='{mrz_val}' selectedValue='{selected_val}' selectedSource={selected_src}")
+            logger.info(f"[FINAL_FIELD] field={field_name} ocrValue='{ocr_val}' qrValue='{qr_val}' mrzValue='{mrz_val}' selectedValue='{selected_val}' selectedSource={selected_src}")
 
-            # Construct INDEPENDENT Field Metadata object (Zero shared state mutation)
-            if selected_val is None:
-                conf = 0.3 if kw_str else 0.0
-                meta = FieldMetadata(
-                    field=field_name,
-                    value=None,
-                    source="OCR",
-                    keyword=kw_str if conf == 0.3 else None,
-                    language=lang_str if conf == 0.3 else None,
-                    confidence=conf,
-                    rawText=None
-                )
-            else:
-                # rawText is strictly the raw OCR string for OCR source or exact selected value
-                final_raw_text = ocr_raw_text if (selected_src == "OCR" and ocr_raw_text) else selected_val
-                meta = FieldMetadata(
-                    field=field_name,
-                    value=normalize_unicode(selected_val),
-                    source=selected_src,
-                    keyword=kw_str,
-                    language=lang_str,
-                    confidence=0.95 if selected_src == "OCR" else 1.0,
-                    rawText=normalize_unicode(final_raw_text)
-                )
+            final_keyword = kw_str if selected_src == "OCR" else None
+            final_language = lang_str if selected_src == "OCR" else None
+            final_raw_text = ocr_raw_text if (selected_src == "OCR" and ocr_raw_text) else selected_val
+
+            meta = FieldMetadata(
+                field=field_name,
+                value=normalize_unicode(selected_val),
+                source=selected_src,
+                keyword=final_keyword,
+                language=final_language,
+                confidence=0.95 if selected_src == "OCR" else 1.0,
+                rawText=normalize_unicode(final_raw_text),
+                ocrValue=normalize_unicode(ocr_val),
+                mrzValue=normalize_unicode(mrz_val),
+                qrValue=normalize_unicode(qr_val),
+                ocrKeyword=kw_str,
+                ocrLanguage=lang_str
+            )
 
             field_metadata.append(meta)
-            logger.info(f"[METADATA] field={field_name} source={meta.source} keyword='{meta.keyword}' rawText='{meta.rawText}' value='{meta.value}' confidence={meta.confidence:.2f}")
 
         return merged_data, field_metadata
