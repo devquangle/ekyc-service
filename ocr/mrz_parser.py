@@ -8,17 +8,54 @@ from utils.logger import logger
 
 class MrzParser:
     """
-    MRZ Image preprocessing and TD1 3-line format text parser with Modulo 10 check digit verification.
+    MRZ Image preprocessing and TD1 3-line format text parser with Modulo 10 check digit verification
+    and ICAO Doc 9303 OCR character confusion cleaning.
     """
 
     @staticmethod
-    def compute_check_digit(mrz_substr: str) -> int:
+    def _clean_numeric_field(text: str) -> str:
+        """
+        Cleans OCR character confusion errors in numeric MRZ fields:
+        'O','Q','D' -> '0'; 'I','L' -> '1'; 'S' -> '5'; 'B' -> '8'; 'Z' -> '2'
+        """
+        if not text:
+            return ""
+        mapping = {
+            'O': '0', 'Q': '0', 'D': '0',
+            'I': '1', 'L': '1',
+            'S': '5',
+            'B': '8',
+            'Z': '2',
+        }
+        res = [mapping.get(char, char) for char in text.upper()]
+        return "".join(res)
+
+    @staticmethod
+    def _clean_alpha_field(text: str) -> str:
+        """
+        Cleans OCR character confusion errors in alpha MRZ fields:
+        '0' -> 'O'; '1' -> 'I'; '5' -> 'S'
+        """
+        if not text:
+            return ""
+        mapping = {
+            '0': 'O',
+            '1': 'I',
+            '5': 'S',
+        }
+        res = [mapping.get(char, char) for char in text.upper()]
+        return "".join(res)
+
+    @classmethod
+    def compute_check_digit(cls, mrz_substr: str) -> int:
         """
         Computes ICAO Doc 9303 Modulo 10 check digit using 7-3-1 weight pattern.
+        Automatically cleans numeric OCR character confusions prior to calculation.
         """
+        cleaned_substr = cls._clean_numeric_field(mrz_substr)
         weights = [7, 3, 1]
         total = 0
-        for idx, char in enumerate(mrz_substr):
+        for idx, char in enumerate(cleaned_substr):
             if '0' <= char <= '9':
                 val = int(char)
             elif 'A' <= char <= 'Z':
@@ -79,15 +116,17 @@ class MrzParser:
 
         # --- Parse Line 1 ---
         raw_id_field = l1[15:27]
-        clean_id_field = re.sub(r'[^\d]', '', raw_id_field)
-        identity_number = clean_id_field if len(clean_id_field) == 12 and clean_id_field.startswith("0") else None
+        clean_id_field = self._clean_numeric_field(raw_id_field)
+        digits_only_id = re.sub(r'[^\d]', '', clean_id_field)
+        identity_number = digits_only_id if len(digits_only_id) == 12 and digits_only_id.startswith("0") else None
 
         # --- Parse Line 2 ---
-        dob_raw = l2[0:6]
-        dob_check = l2[6:7]
+        dob_raw = self._clean_numeric_field(l2[0:6])
+        dob_check = self._clean_numeric_field(l2[6:7])
         sex_raw = l2[7:8]
-        expiry_raw = l2[8:14]
-        expiry_check = l2[14:15]
+        expiry_raw = self._clean_numeric_field(l2[8:14])
+        expiry_check = self._clean_numeric_field(l2[14:15])
+        nationality_raw = self._clean_alpha_field(l2[15:18])
 
         # Verify Check Digits
         valid_dob_check = False
@@ -107,7 +146,8 @@ class MrzParser:
         gender = normalize_gender(sex_raw)
 
         # --- Parse Line 3 ---
-        raw_name = l3.replace("<", " ").strip()
+        clean_l3_alpha = self._clean_alpha_field(l3)
+        raw_name = clean_l3_alpha.replace("<", " ").strip()
         full_name, _ = normalize_full_name(raw_name)
 
         logger.info(f"[MRZ_PARSER] Result: ID={identity_number} Name={full_name} DoB={date_of_birth} Expiry={date_of_expiry} Valid={is_mrz_valid}")

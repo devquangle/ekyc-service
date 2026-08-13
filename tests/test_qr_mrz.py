@@ -1,5 +1,6 @@
 from core.qr_engine import QrEngine
 from core.mrz_engine import MrzEngine
+from ocr.mrz_parser import MrzParser
 
 
 def test_qr_parser_structure():
@@ -37,3 +38,11 @@ def test_mrz_check_digit_calculation():
     # Test Modulo 10 algorithm
     assert MrzEngine.compute_check_digit("041004") == 7
     assert MrzEngine.compute_check_digit("291004") == 6
+    # Test with OCR confusion characters (O -> 0)
+    assert MrzEngine.compute_check_digit("O41OO4") == 7
+
+
+def test_mrz_clean_numeric_and_alpha():
+    assert MrzParser._clean_numeric_field("O41OO4") == "041004"
+    assert MrzParser._clean_numeric_field("ISBZ") == "1582"
+    assert MrzParser._clean_alpha_field("015") == "OIS"
