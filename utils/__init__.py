@@ -1,6 +1,16 @@
 from utils.logger import logger, mask_pii
-from utils.image_utils import decode_image_bytes, crop_image, check_image_quality
-from utils.text_utils import normalize_text, normalize_date, remove_vietnamese_accents, compare_names
+from utils.image_utils import (
+    decode_image_bytes,
+    crop_image,
+    check_image_quality,
+    resize_maintain_aspect,
+)
+from utils.text_utils import (
+    normalize_text,
+    normalize_date,
+    remove_vietnamese_accents,
+    compare_names,
+)
 
 __all__ = [
     "logger",
@@ -8,6 +18,7 @@ __all__ = [
     "decode_image_bytes",
     "crop_image",
     "check_image_quality",
+    "resize_maintain_aspect",
     "normalize_text",
     "normalize_date",
     "remove_vietnamese_accents",

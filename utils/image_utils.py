@@ -44,15 +44,21 @@ def check_image_quality(image: np.ndarray) -> Tuple[bool, bool, bool]:
 
     # 3. Cropped detection (margin boundary threshold)
     h, w = gray.shape[:2]
-    border_margin = int(min(h, w) * 0.02)
+    border_margin = max(1, int(min(h, w) * 0.02))
+
     top_edge = gray[0:border_margin, :]
-    bottom_edge = gray[h - border_margin:h, :]
+    bottom_edge = gray[max(0, h - border_margin):h, :]
     left_edge = gray[:, 0:border_margin]
-    right_edge = gray[:, w - border_margin:w]
+    right_edge = gray[:, max(0, w - border_margin):w]
+
+    std_top = float(np.std(top_edge)) if top_edge.size > 0 else 0.0
+    std_bottom = float(np.std(bottom_edge)) if bottom_edge.size > 0 else 0.0
+    std_left = float(np.std(left_edge)) if left_edge.size > 0 else 0.0
+    std_right = float(np.std(right_edge)) if right_edge.size > 0 else 0.0
 
     # High contrast gradients touching extreme border indicate image crop
     is_cropped = bool(
-        np.std(top_edge) > 60 or np.std(bottom_edge) > 60 or np.std(left_edge) > 60 or np.std(right_edge) > 60
+        std_top > 60.0 or std_bottom > 60.0 or std_left > 60.0 or std_right > 60.0
     )
 
     return is_blur, has_glare, is_cropped
