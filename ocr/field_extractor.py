@@ -383,13 +383,17 @@ class FieldExtractor:
         collected_lines = [kw_line]
         search_text = kw_line.text
 
-        if kw_idx + 1 < len(layout_lines):
+        # 1. First attempt to parse date directly from the keyword line
+        parsed = parse_date(kw_line.text)
+
+        # 2. If kw_line does NOT contain a valid date, try checking kw_idx + 1 line
+        if not parsed and kw_idx + 1 < len(layout_lines):
             next_line = layout_lines[kw_idx + 1]
             if not self._is_keyword_line(next_line):
                 collected_lines.append(next_line)
-                search_text += " " + next_line.text
+                search_text = kw_line.text + " " + next_line.text
+                parsed = parse_date(search_text)
 
-        parsed = parse_date(search_text)
         if not parsed:
             return None
 
