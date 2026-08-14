@@ -495,6 +495,27 @@ class VietnameseAdministrativeRestorer:
         norm = re.sub(r',+', ',', norm)
         norm = re.sub(r'\s+', ' ', norm).strip()
 
+        # Tách tự động Tỉnh/Thành phố ở cuối chuỗi nếu bị dính liền thiếu dấu phẩy (VD: "Binh Tan Vinh Long" -> "Binh Tan, Vinh Long")
+        clean_norm = remove_vietnamese_accents(norm).lower().strip()
+        for p_key, p_val in sorted(PROVINCES_GAZETTEER.items(), key=lambda item: len(item[0]), reverse=True):
+            pattern = r'(.*?)\b(' + re.escape(p_key) + r')$'
+            m = re.search(pattern, clean_norm)
+            if m and m.group(1).strip() and not m.group(1).strip().endswith(','):
+                idx = len(m.group(1).strip())
+                norm = norm[:idx].strip(', ') + ', ' + norm[idx:].strip(', ')
+                break
+
+        # Tách tự động Quận/Huyện trước Tỉnh nếu bị dính liền thiếu dấu phẩy (VD: "Tan Luoc Binh Tan, Vinh Long" -> "Tan Luoc, Binh Tan, Vinh Long")
+        for p_key, dists in DISTRICTS_BY_PROVINCE.items():
+            for d_key, d_val in sorted(dists.items(), key=lambda item: len(item[0]), reverse=True):
+                clean_norm = remove_vietnamese_accents(norm).lower()
+                pattern = r'(.*?)\b(' + re.escape(d_key) + r')(?=,\s*[^,]+$)'
+                m = re.search(pattern, clean_norm)
+                if m and m.group(1).strip() and not m.group(1).strip().endswith(','):
+                    idx = len(m.group(1).strip())
+                    norm = norm[:idx].strip(', ') + ', ' + norm[idx:].strip(', ')
+                    break
+
         # Split into comma-separated segments
         raw_segments = [s.strip() for s in norm.split(',') if s.strip()]
         if not raw_segments:

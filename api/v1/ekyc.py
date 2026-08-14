@@ -1,47 +1,31 @@
-import base64
-import re
-from typing import Optional, Union, Any
+from typing import Optional, Union
 from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Request
+from starlette.concurrency import run_in_threadpool
 from api.dependencies import get_orchestrator
 from schemas.ekyc import FullEkycResponse
 from services.ekyc_orchestrator import EkycOrchestrator
 from config import settings
-from utils.logger import logger
+from utils.media_parser import parse_media_payload
 
 router = APIRouter()
 
-
-def _decode_b64_image(b64_str: str) -> Optional[bytes]:
-    if not b64_str:
-        return None
-    try:
-        clean_b64 = re.sub(r'^data:(?:image|video)\/[a-zA-Z0-9+]+;base64,', '', str(b64_str).strip())
-        return base64.b64decode(clean_b64)
-    except Exception as e:
-        logger.warning(f"Failed to decode base64 data: {e}")
-        return None
-
-
-async def _extract_bytes(val: Any) -> Optional[bytes]:
-    if val is None:
-        return None
-    if hasattr(val, "read"):
-        data = await val.read()
-        return data if data else None
-    if isinstance(val, bytes):
-        return val
-    if isinstance(val, str) and len(val) > 0:
-        b64 = _decode_b64_image(val)
-        if b64 and len(b64) > 10:
-            return b64
-        for enc in ('latin1', 'utf-8'):
-            try:
-                b = val.encode(enc)
-                if len(b) > 20:
-                    return b
-            except Exception:
-                pass
-    return None
+EKYC_FIELD_ALIASES = {
+    "front_image": [
+        "front_image", "frontImage", "card_front", "cardFront",
+        "front", "image_front", "file_front", "image", "file"
+    ],
+    "back_image": [
+        "back_image", "backImage", "card_back", "cardBack",
+        "back", "image_back", "file_back"
+    ],
+    "selfie_image": [
+        "selfie_image", "selfieImage", "selfie", "face_image",
+        "faceImage", "face", "selfie_file"
+    ],
+    "video_file": [
+        "video_file", "videoFile", "video", "video_data"
+    ]
+}
 
 
 @router.post("/ekyc/verify", response_model=FullEkycResponse, summary="Full Orchestrated eKYC Verification Pipeline")
@@ -52,109 +36,53 @@ async def process_full_ekyc(
     selfie_image: Optional[Union[UploadFile, str]] = File(None, description="Selfie photo for face verification (Upload file or Base64 string)"),
     video_file: Optional[Union[UploadFile, str]] = File(None, description="Video file for liveness verification (Upload file or Base64 string)"),
     orchestrator: EkycOrchestrator = Depends(get_orchestrator)
-):
-    front_bytes = None
-    back_bytes = None
-    selfie_bytes = None
-    video_bytes = None
+) -> FullEkycResponse:
+    """
+    Executes the end-to-end full eKYC verification pipeline:
+    Card OCR & QR/MRZ Validation -> Face Crop -> Video Liveness / Anti-Spoofing -> 1-1 Face Matching.
+    Accepts both multipart/form-data and application/json (Base64 payloads).
+    Executes full pipeline in an asynchronous threadpool to ensure non-blocking server performance.
+    """
+    payload = await parse_media_payload(
+        request=request,
+        alias_map=EKYC_FIELD_ALIASES,
+        max_size_mb=settings.MAX_VIDEO_SIZE_MB,  # allows large video size for full pipeline
+        required_fields=["front_image"]
+    )
 
-    max_image_bytes = settings.MAX_IMAGE_SIZE_MB * 1024 * 1024
-    max_video_bytes = settings.MAX_VIDEO_SIZE_MB * 1024 * 1024
-
-    content_type = request.headers.get("content-type", "").lower()
-
-    # 1. JSON Base64 support
-    if "application/json" in content_type:
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                f_val = body.get("front_image") or body.get("frontImage") or body.get("card_front") or body.get("cardFront") or body.get("front") or body.get("image")
-                b_val = body.get("back_image") or body.get("backImage") or body.get("card_back") or body.get("cardBack") or body.get("back")
-                s_val = body.get("selfie_image") or body.get("selfieImage") or body.get("selfie") or body.get("face_image") or body.get("face")
-                v_val = body.get("video_file") or body.get("videoFile") or body.get("video")
-                front_bytes = await _extract_bytes(f_val)
-                back_bytes = await _extract_bytes(b_val)
-                selfie_bytes = await _extract_bytes(s_val)
-                video_bytes = await _extract_bytes(v_val)
-        except Exception as json_err:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid JSON payload: {str(json_err)}"
-            )
-
-    # 2. Multipart form upload
-    if front_bytes is None:
-        if front_image:
-            front_bytes = await _extract_bytes(front_image)
-        if back_image:
-            back_bytes = await _extract_bytes(back_image)
-        if selfie_image:
-            selfie_bytes = await _extract_bytes(selfie_image)
-        if video_file:
-            video_bytes = await _extract_bytes(video_file)
-
-        try:
-            form = await request.form()
-            if not front_bytes:
-                for key in ["front_image", "frontImage", "card_front", "cardFront", "front", "image_front", "file_front", "image", "file"]:
-                    if key in form:
-                        front_bytes = await _extract_bytes(form[key])
-                        if front_bytes:
-                            break
-            if not back_bytes:
-                for key in ["back_image", "backImage", "card_back", "cardBack", "back", "image_back", "file_back"]:
-                    if key in form:
-                        back_bytes = await _extract_bytes(form[key])
-                        if back_bytes:
-                            break
-            if not selfie_bytes:
-                for key in ["selfie_image", "selfieImage", "selfie", "face_image", "faceImage", "face"]:
-                    if key in form:
-                        selfie_bytes = await _extract_bytes(form[key])
-                        if selfie_bytes:
-                            break
-            if not video_bytes:
-                for key in ["video_file", "videoFile", "video"]:
-                    if key in form:
-                        video_bytes = await _extract_bytes(form[key])
-                        if video_bytes:
-                            break
-        except Exception:
-            pass
-
-    if not front_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing required front card image."
-        )
+    front_bytes = payload.get("front_image")
+    back_bytes = payload.get("back_image") or b""
+    selfie_bytes = payload.get("selfie_image")
+    video_bytes = payload.get("video_file")
 
     if not selfie_bytes and not video_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Either selfie_image (or selfieImage) or video_file (or videoFile) must be provided for eKYC verification."
+            detail="Either selfie_image or video_file must be provided for eKYC verification."
         )
 
-    if len(front_bytes) > max_image_bytes or (back_bytes and len(back_bytes) > max_image_bytes):
+    # Validate image size bounds specifically
+    max_image_bytes = settings.MAX_IMAGE_SIZE_MB * 1024 * 1024
+    if front_bytes and len(front_bytes) > max_image_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="ID Card image size exceeds maximum allowed limit."
+            detail=f"Front card image size exceeds limit of {settings.MAX_IMAGE_SIZE_MB}MB."
         )
-
+    if back_bytes and len(back_bytes) > max_image_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Back card image size exceeds limit of {settings.MAX_IMAGE_SIZE_MB}MB."
+        )
     if selfie_bytes and len(selfie_bytes) > max_image_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Selfie image size exceeds maximum allowed limit."
+            detail=f"Selfie image size exceeds limit of {settings.MAX_IMAGE_SIZE_MB}MB."
         )
 
-    if video_bytes and len(video_bytes) > max_video_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Video size exceeds maximum allowed limit."
-        )
-
-    response = orchestrator.process_full_ekyc(
+    response = await run_in_threadpool(
+        orchestrator.process_full_ekyc,
         front_bytes=front_bytes,
-        back_bytes=back_bytes or b"",
+        back_bytes=back_bytes,
         selfie_bytes=selfie_bytes,
         video_bytes=video_bytes
     )

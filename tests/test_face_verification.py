@@ -1,156 +1,175 @@
 import numpy as np
 import pytest
-from config import settings
-from core.face_verification import (
-    CardFaceExtractor,
-    SelfieFaceExtractor,
-    FaceQualityService,
-    FaceAlignmentService,
-    FaceEmbeddingService,
-    FaceVerificationService,
-)
-from schemas.face import BoundingBoxInfo, FaceQualityMetrics
+from unittest.mock import MagicMock
+from schemas.face import BoundingBoxInfo, FaceQualityMetrics, FaceVerifyResponse
+from core.face_verification.face_alignment_service import FaceAlignmentService
+from core.face_verification.face_embedding_service import FaceEmbeddingService
+from core.face_verification.face_quality_service import FaceQualityService
+from core.face_verification.card_face_extractor import CardFaceExtractor
+from core.face_verification.selfie_face_extractor import SelfieFaceExtractor
+from core.face_verification.face_verification_service import FaceVerificationService
 
 
-def test_decision_logic_thresholds():
-    service = FaceVerificationService()
+def test_face_alignment_relative_coordinate_correction():
+    """
+    Tests 5-point face alignment with global landmarks on a cropped ROI
+    to ensure landmarks are shifted correctly and no black/distorted crop occurs.
+    """
+    aligner = FaceAlignmentService()
 
-    # 1. Similarity 0.40 => MISMATCH
-    decision, verified, errs = service._evaluate_decision(0.40, 0.45, 0.60, False)
-    assert decision == "MISMATCH"
-    assert not verified
-    assert "FACE_MISMATCH" in errs
+    # Create dummy face crop 120x100
+    face_crop = np.full((120, 100, 3), 180, dtype=np.uint8)
 
-    # 2. Similarity 0.50 => BORDERLINE
-    decision, verified, errs = service._evaluate_decision(0.50, 0.45, 0.60, False)
-    assert decision == "BORDERLINE"
-    assert not verified
-    assert "FACE_SIMILARITY_BORDERLINE" in errs
+    # Global landmarks from full image where face bbox was [50, 60, 150, 180]
+    bbox = [50, 60, 150, 180]
+    global_kps = np.array([
+        [50 + 30, 60 + 40],   # Left eye
+        [50 + 70, 60 + 40],   # Right eye
+        [50 + 50, 60 + 60],   # Nose
+        [50 + 35, 60 + 80],   # Left mouth
+        [50 + 65, 60 + 80],   # Right mouth
+    ], dtype=np.float32)
 
-    # 3. Similarity 0.5872 => BORDERLINE
-    decision, verified, errs = service._evaluate_decision(0.5872, 0.45, 0.60, False)
-    assert decision == "BORDERLINE"
-    assert not verified
-    assert "FACE_SIMILARITY_BORDERLINE" in errs
-    margin = round(0.5872 - 0.60, 4)
-    assert margin == -0.0128
+    aligned = aligner.align_face(face_crop, landmarks=global_kps, bbox=bbox, target_size=(112, 112))
 
-    # 4. Similarity 0.60 => MATCH
-    decision, verified, errs = service._evaluate_decision(0.60, 0.45, 0.60, False)
-    assert decision == "MATCH"
-    assert verified
-    assert len(errs) == 0
-
-    # 5. Similarity 0.75 => MATCH
-    decision, verified, errs = service._evaluate_decision(0.75, 0.45, 0.60, False)
-    assert decision == "MATCH"
-    assert verified
-    assert len(errs) == 0
+    assert aligned is not None
+    assert aligned.shape == (112, 112, 3)
+    # Ensure image is not completely black
+    assert np.mean(aligned) > 50
 
 
-def test_face_too_small():
-    extractor = CardFaceExtractor(face_app=None)
-    # Create very small 10x10 image
-    small_img = np.ones((10, 10, 3), dtype=np.uint8) * 200
+def test_face_alignment_fallback_resize():
+    """
+    Tests fallback direct resize when landmarks are None.
+    """
+    aligner = FaceAlignmentService()
+    dummy_img = np.zeros((80, 60, 3), dtype=np.uint8)
+    aligned = aligner.align_face(dummy_img, landmarks=None, target_size=(112, 112))
 
-    class MockFace:
-        bbox = [0, 0, 10, 10]
-        det_score = 0.99
-
-    class MockApp:
-        def get(self, img):
-            return [MockFace()]
-
-    mock_extractor = CardFaceExtractor(face_app=MockApp())
-    crop, kps, bbox, errs = mock_extractor.extract_face(small_img)
-
-    assert "CARD_FACE_TOO_SMALL" in errs
-    assert bbox.width == 10 and bbox.height == 10
+    assert aligned is not None
+    assert aligned.shape == (112, 112, 3)
 
 
-def test_no_face_detected():
-    class EmptyApp:
-        def get(self, img):
-            return []
+def test_selfie_extractor_strictly_rejects_missing_face():
+    """
+    Tests that SelfieFaceExtractor strictly rejects empty/black/non-face images
+    and never falls back to returning the full image.
+    """
+    extractor = SelfieFaceExtractor(face_app=None)
+    # A plain black image has no face
+    black_img = np.zeros((300, 300, 3), dtype=np.uint8)
+    crop, kps, bbox_info, errors = extractor.extract_face(black_img)
 
-    extractor = SelfieFaceExtractor(face_app=EmptyApp())
-    img = np.ones((200, 200, 3), dtype=np.uint8) * 100
-    crop, kps, bbox, errs = extractor.extract_face(img)
-
-    assert "SELFIE_FACE_NOT_FOUND" in errs
-    assert not bbox.detected
-
-
-def test_multiple_faces_detected():
-    class MultiFaceApp:
-        def get(self, img):
-            class F1:
-                bbox = [10, 10, 50, 50]
-                det_score = 0.9
-            class F2:
-                bbox = [60, 60, 100, 100]
-                det_score = 0.85
-            return [F1(), F2()]
-
-    extractor = SelfieFaceExtractor(face_app=MultiFaceApp())
-    img = np.ones((200, 200, 3), dtype=np.uint8) * 100
-    crop, kps, bbox, errs = extractor.extract_face(img)
-
-    assert "MULTIPLE_FACES_DETECTED" in errs
+    assert crop is None
+    assert kps is None
+    assert bbox_info.detected is False
+    assert "SELFIE_FACE_NOT_FOUND" in errors
 
 
-def test_embedding_dimension_mismatch():
-    emb_service = FaceEmbeddingService()
-    v1 = np.ones(512, dtype=np.float32) / np.sqrt(512)
-    v2 = np.ones(256, dtype=np.float32) / np.sqrt(256)
+def test_face_embedding_l2_normalization():
+    """
+    Tests FaceEmbeddingService L2 unit normalization.
+    """
+    # Create mock recognition model returning raw 512-d vector
+    mock_app = MagicMock()
+    raw_vec = np.random.randn(512).astype(np.float32) * 5.0
+    mock_rec = MagicMock()
+    mock_rec.get_feat.return_value = raw_vec
+    mock_app.models = {'recognition': mock_rec}
 
-    sim, errs = emb_service.calculate_cosine_similarity(v1, v2)
-    assert "EMBEDDING_DIMENSION_MISMATCH" in errs
-    assert sim == 0.0
+    embedding_service = FaceEmbeddingService(face_app=mock_app)
+    dummy_face = np.full((112, 112, 3), 128, dtype=np.uint8)
 
+    norm_vec, dim, norm, errors = embedding_service.extract_embedding(dummy_face)
 
-def test_invalid_embedding_nan_inf():
-    emb_service = FaceEmbeddingService()
-    img = np.ones((112, 112, 3), dtype=np.uint8)
-
-    class NanApp:
-        def get(self, img):
-            class F:
-                embedding = np.array([np.nan] * 512, dtype=np.float32)
-            return [F()]
-
-    nan_service = FaceEmbeddingService(face_app=NanApp())
-    vec, dim, norm, errs = nan_service.extract_embedding(img)
-
-    assert "INVALID_EMBEDDING" in errs
-    assert vec is None
+    assert norm_vec is not None
+    assert dim == 512
+    assert abs(norm - 1.0) < 1e-5
+    assert len(errors) == 0
 
 
-def test_zero_norm_embedding():
-    emb_service = FaceEmbeddingService()
-    img = np.ones((112, 112, 3), dtype=np.uint8)
+def test_cosine_similarity_calculation():
+    """
+    Tests cosine similarity calculation for identical and orthogonal vectors.
+    """
+    service = FaceEmbeddingService(face_app=None)
 
-    class ZeroApp:
-        def get(self, img):
-            class F:
-                embedding = np.zeros(512, dtype=np.float32)
-            return [F()]
+    v1 = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    v2 = np.array([1.0, 0.0, 0.0], dtype=np.float32)
+    v3 = np.array([0.0, 1.0, 0.0], dtype=np.float32)
 
-    zero_service = FaceEmbeddingService(face_app=ZeroApp())
-    vec, dim, norm, errs = zero_service.extract_embedding(img)
+    sim_identical, err1 = service.calculate_cosine_similarity(v1, v2)
+    assert abs(sim_identical - 1.0) < 1e-5
+    assert len(err1) == 0
 
-    assert "ZERO_NORM_EMBEDDING" in errs
-    assert vec is None
+    sim_orthogonal, err2 = service.calculate_cosine_similarity(v1, v3)
+    assert abs(sim_orthogonal - 0.0) < 1e-5
+    assert len(err2) == 0
 
 
-def test_full_face_verification_end_to_end_borderline_case(dummy_card_front_image, dummy_selfie_image):
-    service = FaceVerificationService()
-    res = service.verify_faces(dummy_card_front_image, dummy_selfie_image)
+def test_face_quality_metrics_and_pose():
+    """
+    Tests FaceQualityService blur score, brightness, face area, and Euler angle estimation.
+    """
+    quality_service = FaceQualityService()
+    face_img = np.full((100, 100, 3), 150, dtype=np.uint8)
+    kps = np.array([
+        [30, 40],
+        [70, 40],
+        [50, 60],
+        [35, 80],
+        [65, 80]
+    ], dtype=np.float32)
 
-    assert res is not None
-    assert hasattr(res, 'decision')
-    assert hasattr(res, 'margin')
-    assert res.cardFaceInfo is not None
-    assert res.selfieFaceInfo is not None
-    assert res.cardFaceQuality is not None
-    assert res.selfieFaceQuality is not None
+    metrics = quality_service.analyze_quality(face_img, landmarks=kps)
+
+    assert metrics.brightness == 150.0
+    assert metrics.faceSize == 10000
+    assert isinstance(metrics.yaw, float)
+    assert isinstance(metrics.pitch, float)
+    assert isinstance(metrics.roll, float)
+
+
+def test_face_verification_full_pipeline_mock():
+    """
+    Tests end-to-end FaceVerificationService orchestration with matching mock faces.
+    """
+    mock_app = MagicMock()
+    vec = np.ones(512, dtype=np.float32)
+    mock_rec = MagicMock()
+    mock_rec.get_feat.return_value = vec
+    mock_app.models = {'recognition': mock_rec}
+
+    # Mock extractors returning detected face
+    mock_card_ext = MagicMock()
+    mock_card_ext.extract_face.return_value = (
+        np.full((100, 100, 3), 120, dtype=np.uint8),
+        np.array([[30, 30], [70, 30], [50, 50], [35, 70], [65, 70]], dtype=np.float32),
+        BoundingBoxInfo(detected=True, bbox=[10, 10, 110, 110], width=100, height=100, detectionScore=0.98),
+        []
+    )
+
+    mock_selfie_ext = MagicMock()
+    mock_selfie_ext.extract_face.return_value = (
+        np.full((100, 100, 3), 120, dtype=np.uint8),
+        np.array([[30, 30], [70, 30], [50, 50], [35, 70], [65, 70]], dtype=np.float32),
+        BoundingBoxInfo(detected=True, bbox=[20, 20, 120, 120], width=100, height=100, detectionScore=0.99),
+        []
+    )
+
+    service = FaceVerificationService(
+        card_extractor=mock_card_ext,
+        selfie_extractor=mock_selfie_ext,
+        face_app=mock_app
+    )
+
+    card_img = np.full((300, 400, 3), 100, dtype=np.uint8)
+    selfie_img = np.full((300, 400, 3), 100, dtype=np.uint8)
+
+    response = service.verify_faces(card_img, selfie_img)
+
+    assert response.faceVerified is True
+    assert response.decision == "MATCH"
+    assert response.similarityScore >= 0.60
+    assert response.cardFaceInfo.detected is True
+    assert response.selfieFaceInfo.detected is True

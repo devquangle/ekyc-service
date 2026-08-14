@@ -83,6 +83,47 @@ class FieldExtractor:
 
         # 7. Place of Residence
         res_field = self._extract_address_field(layout_lines, keyword_matches, "placeOfResidence")
+        if not res_field:
+            # Fallback: On CCCD front, if 'Nơi thường trú' label was faded/missing,
+            # extract address tokens from the bottom right residence area (center_y >= 360, center_x >= 0.35 * card_width)
+            res_tokens: List[OCRText] = []
+            card_width = max([line.max_x for line in layout_lines] + [1000.0])
+            for line in layout_lines:
+                if line.center_y >= 360:
+                    for token in line.tokens:
+                        token_center_x = sum(pt[0] for pt in token.bbox) / max(len(token.bbox), 1)
+                        tok_clean = remove_vietnamese_accents(token.text).lower()
+                        is_left = token_center_x < 0.38 * card_width
+                        is_expiry_stop = (
+                            bool(re.search(r'\b(co|gia|tri|den|date|of|expiry|exp|ngay|thang|nam|het|han|bo|cong|an|cuc|truong)\b', tok_clean))
+                            or bool(re.search(r'\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4}', token.text))
+                            or bool(parse_date(token.text))
+                        )
+                        if is_left and is_expiry_stop:
+                            continue
+                        if re.search(r'\b(bo cong an|ministry of public security|cuc truong cuc canh sat)\b', tok_clean):
+                            continue
+                        # Avoid duplicating origin tokens
+                        if origin_field and origin_field.value_box:
+                            if token.bbox and sum(pt[1] for pt in token.bbox)/4.0 <= origin_field.value_box[3]:
+                                continue
+                        res_tokens.append(token)
+            if res_tokens:
+                raw_res = " ".join(t.text for t in res_tokens)
+                restored_res, canonical_res = normalize_address(raw_res)
+                if restored_res:
+                    res_field = ExtractedField(
+                        fieldName="placeOfResidence",
+                        value=restored_res,
+                        rawText=raw_res,
+                        keyword="Nơi thường trú / Place of residence:",
+                        language="VI/EN",
+                        confidence=0.85,
+                        bbox=self._compute_merged_bbox(res_tokens),
+                        label_box=None,
+                        value_box=self._compute_bbox_4(res_tokens)
+                    )
+
         if res_field:
             extracted["placeOfResidence"] = res_field
 
@@ -222,25 +263,20 @@ class FieldExtractor:
         candidates = []
         for line_idx, line in enumerate(layout_lines):
             norm_id = normalize_identity_number(line.text)
-            if norm_id:
-                score = 0.5 + line.confidence * 0.3
-                if kw_info and abs(line_idx - kw_info[0]) <= 1:
-                    score += 0.2
-                if line.center_y < 400:
-                    score += 0.1
-                candidates.append((score, norm_id, line.text, line))
-            else:
+            if not norm_id:
                 match = re.search(r'\b[0O][0-9OIL]{11}\b|\b[0-9OIL]{12}\b|\b[0-9OIL]{9}\b', line.text, re.IGNORECASE)
                 if match:
-                    raw_id = match.group(0)
-                    norm_id = normalize_identity_number(raw_id)
-                    if norm_id:
-                        score = 0.5 + line.confidence * 0.3
-                        if kw_info and abs(line_idx - kw_info[0]) <= 1:
-                            score += 0.2
-                        if line.center_y < 400:
-                            score += 0.1
-                        candidates.append((score, norm_id, raw_id, line))
+                    norm_id = normalize_identity_number(match.group(0))
+
+            if norm_id:
+                score = 0.5 + line.confidence * 0.3
+                if len(norm_id) == 12:
+                    score += 0.5  # Strong preference for 12-digit CCCD numbers
+                if kw_info and abs(line_idx - kw_info[0]) <= 1:
+                    score += 0.3
+                if line.center_y < 250:
+                    score += 0.2
+                candidates.append((score, norm_id, line.text, line))
 
         if not candidates:
             return None
@@ -542,6 +578,11 @@ class FieldExtractor:
             if match_res:
                 matched_field, _, _ = match_res
                 if matched_field != field_name and matched_field not in ("dateOfExpiry",):
+                    break
+
+            # For placeOfOrigin, stop if we already have origin tokens and reach the lower residence/expiry region
+            if field_name == "placeOfOrigin" and (gathered_tokens or gathered_text_parts):
+                if line.center_y >= 370 or (line.center_y - kw_line.center_y) > 55:
                     break
 
             # Filter tokens: on CCCD_OLD front, 2nd line of residence address often shares a row with expiry info

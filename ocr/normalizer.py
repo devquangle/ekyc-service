@@ -100,28 +100,44 @@ def parse_date(date_str: Optional[str]) -> Optional[str]:
 
 def normalize_identity_number(raw_identity_number: Optional[str]) -> Optional[str]:
     """
-    Normalizes raw identity number string by removing whitespace, fixing common OCR confusions
-    (O->0, I->1, L->1), stripping non-digits, and validating length (9 digits for CMND or 12 for CCCD).
-    Returns None if length is invalid.
+    Normalizes raw identity number string:
+    - Finds 12-digit CCCD or 9-digit CMND patterns.
+    - Fixes common OCR confusions (O->0, I->1, L->1).
+    - Rejects strings where digits make up a small portion of the text (preventing false matches on sentences).
     """
     if not raw_identity_number:
         return None
-    clean = str(raw_identity_number).strip().upper()
-    if not clean:
+    raw_str = str(raw_identity_number).strip()
+    if not raw_str:
         return None
 
-    # Remove whitespace
-    clean = re.sub(r'\s+', '', clean)
+    # 1. Direct regex match for clean 12 digits (CCCD) or 9 digits (CMND)
+    m12 = re.search(r'\b([0-9OIL]{12})\b', raw_str, re.IGNORECASE)
+    if m12:
+        candidate = m12.group(1).upper().replace('O', '0').replace('I', '1').replace('L', '1')
+        if len(candidate) == 12 and candidate.isdigit():
+            return candidate
 
-    # OCR character replacements: O->0, I->1, L->1
-    clean = clean.replace('O', '0').replace('I', '1').replace('L', '1')
+    m9 = re.search(r'\b([0-9OIL]{9})\b', raw_str, re.IGNORECASE)
+    if m9:
+        candidate = m9.group(1).upper().replace('O', '0').replace('I', '1').replace('L', '1')
+        if len(candidate) == 9 and candidate.isdigit():
+            return candidate
 
-    # Keep digits only
+    # 2. Strip label prefixes like 'Số / No.:', 'Số:', 'No:'
+    clean_no_header = re.sub(
+        r'^(?:s[o\u1ed1]\s*[\/:]\s*no\.?|s[o\u1ed1]\s*[:\.\s]|no\.?[:\s]|s[o\u1ed1]\s*dinh\s*danh\s*ca\s*nhan[\s\/:]*)\s*',
+        '', raw_str, flags=re.IGNORECASE
+    ).strip()
+
+    clean = clean_no_header.upper().replace('O', '0').replace('I', '1').replace('L', '1')
     digits_only = re.sub(r'[^\d]', '', clean)
 
-    # Valid lengths: 9 digits (CMND) or 12 digits (CCCD)
     if len(digits_only) in (9, 12):
-        return digits_only
+        non_ws_len = len(re.sub(r'\s+', '', clean_no_header))
+        # Ensure digits make up at least 65% of the non-whitespace text
+        if non_ws_len > 0 and (len(digits_only) / non_ws_len) >= 0.65:
+            return digits_only
 
     return None
 

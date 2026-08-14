@@ -1,47 +1,22 @@
-import base64
-import re
-from typing import Optional, List, Union, Any
+from typing import Optional, List, Union
 from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status, Request
+from starlette.concurrency import run_in_threadpool
 from api.dependencies import get_orchestrator
 from schemas.liveness import LivenessResponse
 from services.ekyc_orchestrator import EkycOrchestrator
 from config import settings
-from utils.logger import logger
+from utils.media_parser import parse_media_payload
 
 router = APIRouter()
 
-
-def _decode_b64_video(b64_str: str) -> Optional[bytes]:
-    if not b64_str:
-        return None
-    try:
-        clean_b64 = re.sub(r'^data:video\/[a-zA-Z0-9+]+;base64,', '', str(b64_str).strip())
-        return base64.b64decode(clean_b64)
-    except Exception as e:
-        logger.warning(f"Failed to decode base64 video: {e}")
-        return None
-
-
-async def _extract_video_bytes(val: Any) -> Optional[bytes]:
-    if val is None:
-        return None
-    if hasattr(val, "read"):
-        data = await val.read()
-        return data if data else None
-    if isinstance(val, bytes):
-        return val
-    if isinstance(val, str) and len(val) > 0:
-        b64 = _decode_b64_video(val)
-        if b64 and len(b64) > 10:
-            return b64
-        for enc in ('latin1', 'utf-8'):
-            try:
-                b = val.encode(enc)
-                if len(b) > 50:
-                    return b
-            except Exception:
-                pass
-    return None
+LIVENESS_FIELD_ALIASES = {
+    "video_file": [
+        "video_file", "videoFile", "video", "file", "video_data"
+    ],
+    "expected_gestures": [
+        "expected_gestures", "expectedGestures", "gestures", "actions"
+    ]
+}
 
 
 @router.post("/ekyc/face/liveness", response_model=LivenessResponse, summary="Video Liveness & Anti-Spoofing Detection")
@@ -50,66 +25,33 @@ async def detect_liveness(
     video_file: Optional[Union[UploadFile, str]] = File(None, description="Recorded video file (Upload MP4/WebM or Base64 string)"),
     expected_gestures: Optional[str] = Form(None, description="Comma-separated expected active gestures (e.g. BLINK,TURN_LEFT)"),
     orchestrator: EkycOrchestrator = Depends(get_orchestrator)
-):
-    video_bytes = None
-    gestures_str = expected_gestures
-    max_size_bytes = settings.MAX_VIDEO_SIZE_MB * 1024 * 1024
+) -> LivenessResponse:
+    """
+    Asynchronously analyzes video stream for passive MiniFASNet anti-spoofing and active challenge gestures.
+    Accepts both multipart/form-data (video upload/string) and application/json (Base64 video string).
+    Executes OpenCV VideoCapture frame analysis in an asynchronous threadpool.
+    """
+    payload = await parse_media_payload(
+        request=request,
+        alias_map=LIVENESS_FIELD_ALIASES,
+        max_size_mb=settings.MAX_VIDEO_SIZE_MB,
+        required_fields=["video_file"],
+        text_fields=["expected_gestures"]
+    )
 
-    content_type = request.headers.get("content-type", "").lower()
-
-    # 1. JSON Base64 support
-    if "application/json" in content_type:
-        try:
-            body = await request.json()
-            if isinstance(body, dict):
-                v_val = body.get("video_file") or body.get("videoFile") or body.get("video") or body.get("file")
-                video_bytes = await _extract_video_bytes(v_val)
-                gestures_str = body.get("expected_gestures") or body.get("expectedGestures") or body.get("gestures")
-        except Exception as json_err:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Invalid JSON payload: {str(json_err)}"
-            )
-
-    # 2. Multipart form upload
-    if video_bytes is None:
-        if video_file:
-            video_bytes = await _extract_video_bytes(video_file)
-
-        try:
-            form = await request.form()
-            if not video_bytes:
-                for key in ["video_file", "videoFile", "video", "file"]:
-                    if key in form:
-                        video_bytes = await _extract_video_bytes(form[key])
-                        if video_bytes:
-                            break
-            if not gestures_str:
-                for key in ["expected_gestures", "expectedGestures", "gestures"]:
-                    if key in form and isinstance(form[key], str):
-                        gestures_str = form[key]
-                        break
-        except Exception:
-            pass
-
-    if not video_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing required video_file."
-        )
-
-    if len(video_bytes) > max_size_bytes:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=f"Video file size exceeds maximum limit of {settings.MAX_VIDEO_SIZE_MB}MB."
-        )
+    video_bytes = payload.get("video_file")
+    raw_gestures = payload.get("expected_gestures")
 
     gestures_list: Optional[List[str]] = None
-    if gestures_str:
-        if isinstance(gestures_str, list):
-            gestures_list = [str(g).strip().upper() for g in gestures_str if str(g).strip()]
-        elif isinstance(gestures_str, str):
-            gestures_list = [g.strip().upper() for g in gestures_str.split(",") if g.strip()]
+    if raw_gestures:
+        if isinstance(raw_gestures, list):
+            gestures_list = [str(g).strip().upper() for g in raw_gestures if str(g).strip()]
+        elif isinstance(raw_gestures, str):
+            gestures_list = [g.strip().upper() for g in raw_gestures.split(",") if g.strip()]
 
-    response = orchestrator.detect_liveness(video_bytes, gestures_list)
+    response = await run_in_threadpool(
+        orchestrator.detect_liveness,
+        video_bytes=video_bytes,
+        expected_gestures=gestures_list
+    )
     return response
