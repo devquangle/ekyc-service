@@ -3,7 +3,7 @@ import numpy as np
 from typing import Optional, Tuple, Dict, Any, List
 from config import settings
 from schemas.face import FaceVerifyResponse
-from core.face_verification import FaceVerificationService
+from core.face_verification.face_verification_service import FaceVerificationService
 from utils.logger import logger
 from utils.image_utils import crop_image
 
@@ -31,30 +31,59 @@ class FaceEngine:
                 allowed_modules=['detection', 'recognition']
             )
             self.app.prepare(ctx_id=ctx_id, det_size=(640, 640))
-            logger.info("InsightFace engine initialized successfully.")
+            logger.info("[FACE_ENGINE] InsightFace engine initialized successfully.")
         except Exception as e:
-            logger.warning(f"InsightFace model failed to initialize (falling back to OpenCV Haar Cascade): {str(e)}")
+            logger.warning(f"[FACE_ENGINE] InsightFace model failed to initialize (falling back to OpenCV Haar Cascade): {str(e)}")
             self.app = None
 
     def verify_faces(
         self, card_image: Optional[np.ndarray], selfie_image: Optional[np.ndarray]
     ) -> FaceVerifyResponse:
         """
-        Executes face verification using modular FaceVerificationService.
+        Executes modular 1-1 face verification between card portrait and live selfie.
         """
         return self.verification_service.verify_faces(card_image, selfie_image)
 
     def extract_face_embedding(self, image: np.ndarray) -> Tuple[Optional[np.ndarray], int]:
         """
-        Detects faces and extracts normalized 512-d embedding for the largest face.
-        Returns: (embedding_vector, face_count)
+        Executes standard eKYC pipeline:
+        1. Detect Face & Extract 5 Landmarks (KPS).
+        2. 5-point Affine Alignment to Standard 112x112 ArcFace Template.
+        3. ArcFace Feature Extraction via Recognition Model (get_feat).
+        4. L2 Normalization (||v||_2 = 1.0).
+
+        Returns:
+            Tuple: (L2_normalized_embedding_vector, face_count)
         """
         if image is None or image.size == 0:
             return None, 0
 
-        vec, dim, norm, errs = self.verification_service.embedding_service.extract_embedding(image)
-        if vec is not None:
-            return vec, 1
+        # Step 1: Detect face using layout-agnostic extractor
+        face_crop, kps, bbox_info, errs = self.verification_service.card_extractor.extract_face(image)
+        if face_crop is None or not bbox_info.detected:
+            # Try selfie extractor if card extractor found no face
+            face_crop, kps, bbox_info, errs = self.verification_service.selfie_extractor.extract_face(image)
+
+        if face_crop is None or not bbox_info.detected:
+            return None, 0
+
+        # Step 2: 5-Point Affine Alignment to Standard 112x112 Template
+        aligned_face = self.verification_service.alignment_service.align_face(
+            face_crop,
+            landmarks=kps,
+            bbox=bbox_info.bbox,
+            target_size=(112, 112)
+        )
+
+        if aligned_face is None:
+            return None, 0
+
+        # Step 3 & 4: ArcFace Feature Extraction & L2 Normalization
+        emb_vec, dim, norm, emb_errs = self.verification_service.embedding_service.extract_embedding(aligned_face)
+
+        if emb_vec is not None and len(emb_errs) == 0:
+            return emb_vec, 1
+
         return None, 0
 
     def calculate_similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:

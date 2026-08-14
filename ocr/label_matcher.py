@@ -273,41 +273,54 @@ class LabelMatcher:
     def __init__(self, min_similarity_threshold: float = 0.65):
         self.min_similarity_threshold = min_similarity_threshold
 
-    def match_line_label(self, line_text: str) -> Optional[Tuple[str, str, float]]:
+    def match_all_line_labels(self, line_text: str) -> Dict[str, Tuple[str, float]]:
         if not line_text or len(line_text.strip()) < 2:
-            return None
+            return {}
 
         clean_line = remove_vietnamese_accents(line_text).lower()
         clean_line_nopunct = re.sub(r'[\/._\-:]+', ' ', clean_line).strip()
         clean_line_nopunct = re.sub(r'\s+', ' ', clean_line_nopunct)
 
-        best_match: Optional[Tuple[str, str, float]] = None
-        best_score = 0.0
+        matches: Dict[str, Tuple[str, float]] = {}
 
         for field_name, labels in FIELD_LABELS.items():
+            best_score = 0.0
+            best_label = ""
             for label in labels:
                 label_unaccented = remove_vietnamese_accents(label).lower()
                 label_clean = re.sub(r'[\/._\-:]+', ' ', label_unaccented).strip()
                 label_clean = re.sub(r'\s+', ' ', label_clean)
 
-                # 1. Exact or Word Boundary Substring Match
                 if len(label_clean) <= 4:
                     pattern = r'\b' + re.escape(label_clean) + r'[:\s\/._]*'
                     if re.search(pattern, clean_line) or re.search(pattern, clean_line_nopunct):
-                        return (field_name, label, 1.0)
+                        matches[field_name] = (label, 1.0)
+                        break
                 else:
                     pattern = r'\b' + re.escape(label_clean) + r'\b'
                     if re.search(pattern, clean_line) or re.search(pattern, clean_line_nopunct) or label_clean in clean_line_nopunct:
-                        return (field_name, label, 1.0)
+                        matches[field_name] = (label, 1.0)
+                        break
 
-                # 2. Generic Fuzzy Matching (Sequence & Substring Character Similarity)
                 if len(label_clean) > 4:
                     score = self._compute_fuzzy_similarity(clean_line_nopunct, label_clean)
                     if score >= self.min_similarity_threshold and score > best_score:
                         best_score = score
-                        best_match = (field_name, label, round(best_score, 2))
+                        best_label = label
 
-        return best_match
+            if field_name not in matches and best_score >= self.min_similarity_threshold:
+                matches[field_name] = (best_label, round(best_score, 2))
+
+        return matches
+
+    def match_line_label(self, line_text: str) -> Optional[Tuple[str, str, float]]:
+        all_matches = self.match_all_line_labels(line_text)
+        if not all_matches:
+            return None
+        # Return best match
+        best_field = max(all_matches, key=lambda k: all_matches[k][1])
+        lbl, score = all_matches[best_field]
+        return (best_field, lbl, score)
 
     def _compute_fuzzy_similarity(self, text: str, label: str) -> float:
         # Full string similarity ratio
@@ -319,3 +332,4 @@ class LabelMatcher:
         compact_ratio = difflib.SequenceMatcher(None, text_compact, label_compact).ratio()
 
         return max(full_ratio, compact_ratio)
+

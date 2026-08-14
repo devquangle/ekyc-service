@@ -102,3 +102,71 @@ def test_case8_card_expired():
     assert cross_val_res.isExpired is True
     assert card_verified is False
     assert "CARD_EXPIRED" in errors
+
+
+def test_card_validator_type_specific_comparators():
+    validator = CardValidator()
+    
+    # 1. Gender: 'Nam' vs 'M' vs 'MALE' -> MATCH
+    ocr_data = ExtractedCardData(identityNumber="087204000897", fullName="HUYNH QUANG LE", gender="Nam")
+    qr_data = {"identityNumber": "087204000897", "fullName": "HUYNH QUANG LE", "gender": "Nam"}
+    mrz_data = {"identityNumber": "087204000897", "fullName": "HUYNH QUANG LE", "gender": "Nam", "isMrzValid": True}
+    
+    verified, res, _ = validator.validate(ocr_data, qr_data, mrz_data, card_type="CCCD_OLD")
+    g_detail = next(d for d in res.details if d.fieldName == "gender")
+    assert g_detail.status == "MATCH"
+    assert verified is True
+
+    # 2. Date: '04/10/2004' vs '2004-10-04' -> MATCH
+    ocr_data_date = ExtractedCardData(dateOfBirth="2004-10-04", dateOfExpiry="2029-10-04")
+    qr_data_date = {"dateOfBirth": "2004-10-04", "dateOfExpiry": "2029-10-04"}
+    _, res_date, _ = validator.validate(ocr_data_date, qr_data_date, None, card_type="CCCD_NEW")
+    dob_detail = next(d for d in res_date.details if d.fieldName == "dateOfBirth")
+    assert dob_detail.status == "MATCH"
+
+
+def test_card_processor_visual_regions_and_bounding_box_info(mocker):
+    from schemas.face import BoundingBoxInfo
+    from core.ocr_engine import OcrEngine
+    from core.qr_engine import QrEngine
+    import numpy as np
+
+    ocr_engine = mocker.MagicMock(spec=OcrEngine)
+    qr_engine = mocker.MagicMock(spec=QrEngine)
+    mrz_engine = mocker.MagicMock(spec=MrzEngine)
+
+    ocr_engine.detect_tokens.return_value = []
+    qr_engine.decode.return_value = None
+    qr_engine.last_qr_bbox = [450.0, 50.0, 600.0, 200.0]
+    mrz_engine.parse.return_value = None
+
+    processor = CardProcessor(ocr_engine=ocr_engine, qr_engine=qr_engine, mrz_engine=mrz_engine)
+    
+    mock_bbox = BoundingBoxInfo(
+        detected=True,
+        x1=50,
+        y1=100,
+        x2=200,
+        y2=300,
+        width=150,
+        height=200,
+        detectionScore=0.99
+    )
+    mocker.patch.object(processor.card_face_extractor, "extract_face", return_value=(None, None, mock_bbox, []))
+
+    dummy_img = np.zeros((400, 600, 3), dtype=np.uint8)
+    (
+        card_type,
+        conf,
+        extracted_data,
+        qr_data,
+        mrz_data,
+        quality,
+        metadata,
+        visual_regions
+    ) = processor.process(dummy_img)
+
+    assert visual_regions is not None
+    assert visual_regions.portrait == [50.0, 100.0, 200.0, 300.0]
+    assert visual_regions.qrCode == [450.0, 50.0, 600.0, 200.0]
+

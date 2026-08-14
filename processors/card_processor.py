@@ -8,6 +8,7 @@ from ocr import (
     CardTypeClassifier,
     OCRText,
 )
+from ocr.layout_parser import compute_tokens_bbox
 from schemas.card import ExtractedCardData, QualityChecks, FieldMetadata, VisualRegions
 from core.face_verification.card_face_extractor import CardFaceExtractor
 from utils.card_aligner import CardAligner
@@ -22,10 +23,23 @@ from config import settings
 class CardProcessor:
     """
     Primary Data Extraction Orchestrator for Card Processing.
-    Collects raw data across OCR, QR, and MRZ engines, performs image quality checks,
-    classifies card type, and returns structured extracted data with MRZ/QR fallbacks for validation.
+    Collects raw data across OCR, QR, and MRZ engines on aligned images,
+    performs image quality checks, classifies card type, and resolves field values
+    using configured multi-source priority fallback matrices.
     Extracts distinct label_box, value_box, and visual regions (portrait, qrCode, mrzBlock).
     """
+
+    FIELD_PRIORITY = {
+        "identityNumber": ["QR", "MRZ", "OCR"],
+        "fullName": ["QR", "OCR", "MRZ"],
+        "dateOfBirth": ["QR", "OCR", "MRZ"],
+        "gender": ["QR", "OCR", "MRZ"],
+        "nationality": ["QR", "OCR"],
+        "placeOfOrigin": ["QR", "OCR"],
+        "placeOfResidence": ["QR", "OCR"],
+        "dateOfIssue": ["QR", "OCR"],
+        "dateOfExpiry": ["QR", "OCR", "MRZ"],
+    }
 
     def __init__(self, ocr_engine: OcrEngine, qr_engine: QrEngine, mrz_engine: MrzEngine):
         self.ocr_engine = ocr_engine
@@ -45,17 +59,21 @@ class CardProcessor:
         field_name: str
     ) -> Optional[str]:
         """
-        Resolves field value using prioritized sources:
-        1. OCR extracted field
-        2. QR Code fallback
-        3. MRZ parsed value
+        Resolves field value using data-driven priority matrix (QR -> OCR/MRZ).
+        Applies address diacritic restoration and fullName whitespace enhancement.
         """
         ocr_ext = all_ocr_fields.get(field_name)
-        ocr_val = ocr_ext.value if ocr_ext and ocr_ext.value else None
+        ocr_val = ocr_ext.value if (ocr_ext and ocr_ext.value) else None
         qr_val = qr_data.get(field_name) if qr_data else None
         mrz_val = mrz_data.get(field_name) if mrz_data else None
 
-        # Sticky name resolution for fullName
+        source_values = {
+            "OCR": ocr_val,
+            "QR": qr_val,
+            "MRZ": mrz_val
+        }
+
+        # 1. Full Name whitespace refinement
         if field_name == "fullName":
             better_name = qr_val or mrz_val
             if ocr_val and better_name:
@@ -65,7 +83,7 @@ class CardProcessor:
                     logger.info(f"[CARD_PROCESSOR] Replacing sticky OCR name '{ocr_val}' with properly spaced name '{better_name}'")
                     return better_name
 
-        # Address fields: ensure full diacritic restoration & cross-validation with QR
+        # 2. Address fields diacritic restoration
         if field_name in ("placeOfResidence", "placeOfOrigin"):
             if qr_val and not ocr_val:
                 return VietnameseAdministrativeRestorer.restore_address_diacritics(qr_val) or qr_val
@@ -73,17 +91,16 @@ class CardProcessor:
                 restored_ocr = VietnameseAdministrativeRestorer.restore_address_diacritics(ocr_val) or ocr_val
                 if qr_val:
                     restored_qr = VietnameseAdministrativeRestorer.restore_address_diacritics(qr_val) or qr_val
-                    # If QR has more complete accents or content, prefer QR
                     if len(restored_qr) > len(restored_ocr):
                         return restored_qr
                 return restored_ocr
 
-        if ocr_val:
-            return ocr_val
-        if qr_val:
-            return qr_val
-        if mrz_val:
-            return mrz_val
+        # 3. Standard Priority Resolution
+        priority_list = self.FIELD_PRIORITY.get(field_name, ["QR", "OCR", "MRZ"])
+        for src in priority_list:
+            val = source_values.get(src)
+            if val is not None and str(val).strip():
+                return str(val).strip()
 
         return None
 
@@ -129,7 +146,7 @@ class CardProcessor:
                 isCropped=is_cropped_f or is_cropped_b
             )
 
-            # 2. Card Alignment — straighten tilted/skewed card before OCR
+            # 2. Card Alignment — straighten tilted/skewed card before OCR and downstream tasks
             ocr_front = front_image
             ocr_back = back_image
             if self.card_aligner:
@@ -141,16 +158,16 @@ class CardProcessor:
                     if back_was_aligned:
                         ocr_back = aligned_back
 
-            # 3. Portrait Face Extraction & Bounding Box
+            # 3. Portrait Face Extraction & Bounding Box on aligned front image
             portrait_box: Optional[List[float]] = None
             try:
                 _, _, bbox_info, _ = self.card_face_extractor.extract_face(ocr_front)
                 if bbox_info and bbox_info.detected:
                     portrait_box = [
-                        round(float(bbox_info.x), 1),
-                        round(float(bbox_info.y), 1),
-                        round(float(bbox_info.x + bbox_info.w), 1),
-                        round(float(bbox_info.y + bbox_info.h), 1)
+                        round(float(bbox_info.x1), 1),
+                        round(float(bbox_info.y1), 1),
+                        round(float(bbox_info.x2), 1),
+                        round(float(bbox_info.y2), 1)
                     ]
             except Exception as fe_err:
                 logger.debug(f"[CARD_PROCESSOR] Portrait face detection skipped: {fe_err}")
@@ -181,17 +198,17 @@ class CardProcessor:
 
             logger.info(f"[CARD_PROCESSOR] Merged OCR fields: front={list(front_fields.keys())} back={list(back_fields.keys())} merged={list(all_ocr_fields.keys())}")
 
-            # 6. QR Parser (Scan front_image first, fallback to back_image)
-            qr_data = self.qr_engine.decode(front_image) if self.qr_engine else None
+            # 6. QR Parser (Scan aligned ocr_front first, fallback to aligned ocr_back)
+            qr_data = self.qr_engine.decode(ocr_front) if self.qr_engine else None
             qr_box = getattr(self.qr_engine, 'last_qr_bbox', None)
 
-            if not qr_data and self.qr_engine and back_image is not None and back_image.size > 0:
+            if not qr_data and self.qr_engine and ocr_back is not None and ocr_back.size > 0:
                 logger.info("[CARD_PROCESSOR] Front image QR null or unreadable. Executing back image QR scan fallback...")
-                qr_data = self.qr_engine.decode(back_image)
+                qr_data = self.qr_engine.decode(ocr_back)
                 if not qr_box:
                     qr_box = getattr(self.qr_engine, 'last_qr_bbox', None)
 
-            # 7. MRZ Parser & Bounding Box
+            # 7. MRZ Parser & Bounding Box on aligned ocr_back
             back_text_lines = [t.text for t in back_tokens]
             mrz_data = self.mrz_engine.parse(back_text_lines) if (self.mrz_engine and back_text_lines) else None
 
@@ -204,7 +221,7 @@ class CardProcessor:
                     if ("<" in t_txt and len(t_txt) >= 15) or len(t_txt) >= 28 or (t.center_y > 0.60 * back_h and len(t_txt) >= 15):
                         mrz_tokens.append(t)
                 if mrz_tokens:
-                    mrz_box = self.field_extractor._compute_bbox_4(mrz_tokens)
+                    mrz_box = compute_tokens_bbox(mrz_tokens)
 
             visual_regions = VisualRegions(
                 portrait=portrait_box,
@@ -219,7 +236,7 @@ class CardProcessor:
 
             logger.info(f"[CARD_PROCESSOR] Classified Card Type: {card_type} (conf={card_type_confidence})")
 
-            # 9. Construct ExtractedCardData with Fallback Priority (OCR -> QR -> MRZ)
+            # 9. Construct ExtractedCardData with Priority Resolution
             extracted_data = ExtractedCardData(
                 identityNumber=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "identityNumber"),
                 fullName=self._get_field_val_with_fallback(all_ocr_fields, qr_data, mrz_data, "fullName"),

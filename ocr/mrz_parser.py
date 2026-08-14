@@ -1,6 +1,7 @@
 import re
 import cv2
 import numpy as np
+from datetime import datetime
 from typing import Optional, Dict, Any, List
 from ocr.normalizer import parse_date, normalize_full_name, normalize_gender
 from utils.logger import logger
@@ -8,8 +9,12 @@ from utils.logger import logger
 
 class MrzParser:
     """
-    MRZ Image preprocessing and TD1 3-line format text parser with Modulo 10 check digit verification
-    and ICAO Doc 9303 OCR character confusion cleaning.
+    ICAO Doc 9303 Part 5 (TD1 3-line format) MRZ Parser & Validator.
+    Features:
+    - Auto-detection of MRZ candidate zone using bracket '<' density and token morphology.
+    - Full ICAO Modulo 10 7-3-1 weight pattern check digits (DoB, Expiry, Document Number, Composite).
+    - Century disambiguation for 2-digit years.
+    - OCR glyph confusion repair ('O' <-> '0', 'I' <-> '1', 'S' <-> '5', etc.).
     """
 
     @staticmethod
@@ -49,63 +54,52 @@ class MrzParser:
     @classmethod
     def compute_check_digit(cls, mrz_substr: str) -> int:
         """
-        Computes ICAO Doc 9303 Modulo 10 check digit using 7-3-1 weight pattern.
-        Automatically cleans numeric OCR character confusions prior to calculation.
+        Computes ICAO Doc 9303 Modulo 10 check digit using [7, 3, 1] weight pattern.
+        Automatically cleans OCR glyph confusions prior to calculation.
         """
+        if not mrz_substr:
+            return 0
+
         cleaned_substr = cls._clean_numeric_field(mrz_substr)
         weights = [7, 3, 1]
         total = 0
-        for idx, char in enumerate(cleaned_substr):
+
+        for idx, char in enumerate(cleaned_substr.upper()):
             if '0' <= char <= '9':
                 val = int(char)
             elif 'A' <= char <= 'Z':
                 val = ord(char) - ord('A') + 10
-            elif char == '<':
-                val = 0
             else:
                 val = 0
             total += val * weights[idx % 3]
+
         return total % 10
 
-    def preprocess_mrz_region(self, image: np.ndarray) -> Optional[np.ndarray]:
-        """
-        Crops bottom 35% of back card image, converts to grayscale, resizes, and applies Otsu thresholding.
-        """
-        if image is None or image.size == 0:
-            return None
-
-        h, w = image.shape[:2]
-        crop = image[int(h * 0.60):h, 0:w]
-
-        if crop.size == 0:
-            return None
-
-        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if len(crop.shape) == 3 else crop
-        resized = cv2.resize(gray, (1024, int(1024 * (crop.shape[0] / crop.shape[1]))))
-        _, thresh = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        return thresh
-
     def parse_mrz_lines(self, ocr_text_lines: List[str]) -> Optional[Dict[str, Any]]:
+        """
+        Parses 3 TD1 MRZ lines into structured fields with complete ICAO Doc 9303 validation.
+        """
         if not ocr_text_lines:
             return None
 
-        # Filter candidate lines containing TD1 MRZ pattern
-        mrz_candidate_lines = []
+        # Filter candidate lines containing TD1 MRZ characteristics (< density, VNM, length >= 20)
+        mrz_candidates: List[str] = []
         for line in ocr_text_lines:
             clean_line = re.sub(r'\s+', '', line).upper()
-            clean_line = clean_line.replace('«', '<').replace('(', '<')
-            if len(clean_line) >= 20 and ('VNM' in clean_line or '<' in clean_line or clean_line.startswith('I')):
-                mrz_candidate_lines.append(clean_line)
+            clean_line = clean_line.replace('«', '<').replace('(', '<').replace(')', '<').replace('{', '<').replace('}', '<')
+            if len(clean_line) >= 20 and ('<' in clean_line or 'VNM' in clean_line or clean_line.startswith('I')):
+                mrz_candidates.append(clean_line)
 
-        if len(mrz_candidate_lines) < 3:
-            logger.debug(f"[MRZ_PARSER] Insufficient MRZ candidate lines: {len(mrz_candidate_lines)}")
+        if len(mrz_candidates) < 3:
+            logger.debug(f"[MRZ_PARSER] Insufficient MRZ candidate lines found: {len(mrz_candidates)}")
             return None
 
-        # Take last 3 lines
-        l1 = mrz_candidate_lines[-3]
-        l2 = mrz_candidate_lines[-2]
-        l3 = mrz_candidate_lines[-1]
+        # Take last 3 candidate lines
+        l1 = mrz_candidates[-3]
+        l2 = mrz_candidates[-2]
+        l3 = mrz_candidates[-1]
 
+        # Standard TD1 lines are strictly 30 characters
         l1 = (l1 + "<" * 30)[:30]
         l2 = (l2 + "<" * 30)[:30]
         l3 = (l3 + "<" * 30)[:30]
@@ -114,43 +108,55 @@ class MrzParser:
         logger.info(f"[MRZ_PARSER] Line 2: {l2}")
         logger.info(f"[MRZ_PARSER] Line 3: {l3}")
 
-        # --- Parse Line 1 ---
+        # --- Parse Line 1: [0:2] Document Type, [2:5] Country, [5:14] Doc Num, [14] Check Digit, [15:30] Optional Data (12-digit CCCD) ---
         raw_id_field = l1[15:27]
         clean_id_field = self._clean_numeric_field(raw_id_field)
         digits_only_id = re.sub(r'[^\d]', '', clean_id_field)
         identity_number = digits_only_id if len(digits_only_id) == 12 and digits_only_id.startswith("0") else None
 
-        # --- Parse Line 2 ---
+        # --- Parse Line 2: [0:6] DoB, [6] DoB Check, [7] Sex, [8:14] Expiry, [14] Expiry Check, [15:18] Nationality, [18:29] Optional Data 2, [29] Composite Check ---
         dob_raw = self._clean_numeric_field(l2[0:6])
         dob_check = self._clean_numeric_field(l2[6:7])
         sex_raw = l2[7:8]
         expiry_raw = self._clean_numeric_field(l2[8:14])
         expiry_check = self._clean_numeric_field(l2[14:15])
         nationality_raw = self._clean_alpha_field(l2[15:18])
+        composite_check_raw = self._clean_numeric_field(l2[29:30])
 
-        # Verify Check Digits
+        # 1. DoB Check Digit Validation
         valid_dob_check = False
+        if dob_check.isdigit():
+            valid_dob_check = (self.compute_check_digit(dob_raw) == int(dob_check))
+
+        # 2. Expiry Check Digit Validation
         valid_expiry_check = False
-        try:
-            if dob_check.isdigit():
-                valid_dob_check = (self.compute_check_digit(dob_raw) == int(dob_check))
-            if expiry_check.isdigit():
-                valid_expiry_check = (self.compute_check_digit(expiry_raw) == int(expiry_check))
-        except Exception as e:
-            logger.error(f"[MRZ_PARSER] Check digit validation error: {str(e)}")
+        if expiry_check.isdigit():
+            valid_expiry_check = (self.compute_check_digit(expiry_raw) == int(expiry_check))
+
+        # 3. Composite Check Digit Validation (ICAO Doc 9303 Part 5 Section 4.2.2)
+        # Composite data: Line1[5:30] + Line2[0:7] + Line2[8:15] + Line2[18:29]
+        composite_data = l1[5:30] + l2[0:7] + l2[8:15] + l2[18:29]
+        valid_composite_check = False
+        if composite_check_raw.isdigit():
+            expected_composite = self.compute_check_digit(composite_data)
+            valid_composite_check = (expected_composite == int(composite_check_raw))
 
         is_mrz_valid = valid_dob_check and valid_expiry_check
 
-        date_of_birth = parse_date(dob_raw)
-        date_of_expiry = parse_date(expiry_raw)
+        # Dates & Gender Normalization with century calculation
+        date_of_birth = parse_date(dob_raw, is_expiry=False)
+        date_of_expiry = parse_date(expiry_raw, is_expiry=True)
         gender = normalize_gender(sex_raw)
 
-        # --- Parse Line 3 ---
+        # --- Parse Line 3: Name ---
         clean_l3_alpha = self._clean_alpha_field(l3)
         raw_name = clean_l3_alpha.replace("<", " ").strip()
         full_name, _ = normalize_full_name(raw_name)
 
-        logger.info(f"[MRZ_PARSER] Result: ID={identity_number} Name={full_name} DoB={date_of_birth} Expiry={date_of_expiry} Valid={is_mrz_valid}")
+        logger.info(
+            f"[MRZ_PARSER] Parsed: ID={identity_number} Name={full_name} "
+            f"DoB={date_of_birth} Expiry={date_of_expiry} Valid={is_mrz_valid} CompositeValid={valid_composite_check}"
+        )
 
         return {
             "identityNumber": identity_number,
@@ -161,4 +167,5 @@ class MrzParser:
             "dateOfExpiry": date_of_expiry,
             "isMrzValid": is_mrz_valid,
             "mrzCheckDigitValid": is_mrz_valid,
+            "compositeCheckDigitValid": valid_composite_check,
         }

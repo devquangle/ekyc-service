@@ -7,9 +7,10 @@ from utils.logger import logger
 
 class QrParser:
     """
-    Decodes QR Code from Vietnamese CCCD front/back card images using multi-step cropping,
-    grayscale enhancement, CLAHE/Thresholding, 180-degree rotation fallbacks, and multiple QR decoding engines.
-    Tracks and extracts accurate QR bounding box [x_min, y_min, x_max, y_max].
+    High-Precision Multi-Format QR Code Parser for Vietnamese Identity Cards.
+    Supports both Old CCCD chip cards (Front QR) and 2024 Căn Cước cards (Back/Front QR).
+    Features multi-quadrant ROI extraction, multi-angle rotation, CLAHE/Otsu preprocessing,
+    and multi-engine decoding (OpenCV, pyzbar, zxingcpp).
     """
 
     def __init__(self):
@@ -17,6 +18,9 @@ class QrParser:
         self.last_qr_bbox: Optional[List[float]] = None
 
     def decode(self, image: np.ndarray) -> Optional[Dict[str, Any]]:
+        """
+        Decodes and parses QR code into canonical field dictionary.
+        """
         if image is None or image.size == 0:
             self.last_qr_bbox = None
             return None
@@ -73,7 +77,7 @@ class QrParser:
         except Exception:
             pass
 
-        # 3. zxing-cpp if installed
+        # 3. zxingcpp if installed
         try:
             import zxingcpp
             results = zxingcpp.read_barcodes(img)
@@ -91,100 +95,98 @@ class QrParser:
 
         return None, None
 
-    def _decode_image_variants(self, img: np.ndarray) -> Optional[str]:
-        text, _ = self._decode_variant_with_box(img)
-        return text
-
     def _try_detect_qr_with_box(self, image: np.ndarray) -> Tuple[Optional[str], Optional[List[float]]]:
         if image is None or image.size == 0:
             return None, None
 
-        # Tầng 1: Decode trực tiếp trên toàn ảnh gốc
+        # Tier 1: Decode directly on original full frame
         res_full, box_full = self._decode_variant_with_box(image)
         if res_full:
             return res_full, box_full
 
-        # Tầng 2: Cắt vùng ROI góc trên bên phải [0:48%H, 48%W:100%W]
         h, w = image.shape[:2]
-        offset_x = int(w * 0.48)
-        offset_y = 0
-        qr_roi = image[0:int(h * 0.48), offset_x:w]
-        if qr_roi.size == 0:
-            return None, None
 
-        # Decode trực tiếp trên ROI gốc
-        res_roi, box_roi = self._decode_variant_with_box(qr_roi)
-        if res_roi:
-            final_box = None
-            if box_roi:
-                final_box = [box_roi[0] + offset_x, box_roi[1] + offset_y, box_roi[2] + offset_x, box_roi[3] + offset_y]
-            return res_roi, final_box
-
-        # Tầng 3: Tiền xử lý ROI
-        # + Phóng to 2x INTER_CUBIC
-        resized = cv2.resize(qr_roi, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-        # + Chuyển sang ảnh xám (Grayscale)
-        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) == 3 else resized
-        # + Tăng tương phản CLAHE (clipLimit=3.0, tileGridSize=(8, 8))
-        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
-        enhanced = clahe.apply(gray)
-        # + Nhị phân hóa Otsu
-        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        _, otsu_enhanced = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        # Tầng 4: Chạy thử tuần tự qua các biến thể ảnh (gốc resized, CLAHE, Otsu, xoay 180 độ)
-        variants = [
-            enhanced,
-            gray,
-            otsu,
-            otsu_enhanced,
-            resized,
-            cv2.rotate(enhanced, cv2.ROTATE_180),
-            cv2.rotate(otsu, cv2.ROTATE_180),
+        # Tier 2: Multi-Quadrant Search (Old CCCD Top-Right, 2024 Card Top-Left / Bottom-Right)
+        quadrants = [
+            ("TOP_RIGHT", 0, int(h * 0.50), int(w * 0.45), w),
+            ("TOP_LEFT", 0, int(h * 0.50), 0, int(w * 0.55)),
+            ("BOTTOM_RIGHT", int(h * 0.45), h, int(w * 0.45), w),
         ]
 
-        for variant in variants:
-            res_var, box_var = self._decode_variant_with_box(variant)
-            if res_var:
-                final_box = None
-                if box_var:
-                    final_box = [
-                        round(box_var[0] / 2.0 + offset_x, 1),
-                        round(box_var[1] / 2.0 + offset_y, 1),
-                        round(box_var[2] / 2.0 + offset_x, 1),
-                        round(box_var[3] / 2.0 + offset_y, 1)
-                    ]
-                else:
-                    # Fallback to the ROI area if exact box was not returned by engine
-                    final_box = [float(offset_x), float(offset_y), float(w), float(int(h * 0.48))]
-                return res_var, final_box
+        for q_name, y1, y2, x1, x2 in quadrants:
+            roi = image[y1:y2, x1:x2]
+            if roi.size == 0:
+                continue
+
+            # Check direct ROI
+            res_roi, box_roi = self._decode_variant_with_box(roi)
+            if res_roi:
+                final_box = [box_roi[0] + x1, box_roi[1] + y1, box_roi[2] + x1, box_roi[3] + y1] if box_roi else [float(x1), float(y1), float(x2), float(y2)]
+                return res_roi, final_box
+
+            # Tier 3: Multi-Stage Image Enhancement on ROI
+            resized = cv2.resize(roi, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+            gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) == 3 else resized
+
+            clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+            enhanced = clahe.apply(gray)
+            _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            _, otsu_enhanced = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+            variants = [
+                enhanced,
+                otsu,
+                otsu_enhanced,
+                gray,
+                resized,
+                cv2.rotate(enhanced, cv2.ROTATE_90_CLOCKWISE),
+                cv2.rotate(enhanced, cv2.ROTATE_180),
+                cv2.rotate(enhanced, cv2.ROTATE_90_COUNTERCLOCKWISE),
+                cv2.rotate(otsu, cv2.ROTATE_180),
+            ]
+
+            for variant in variants:
+                res_var, box_var = self._decode_variant_with_box(variant)
+                if res_var:
+                    if box_var:
+                        final_box = [
+                            round(box_var[0] / 2.0 + x1, 1),
+                            round(box_var[1] / 2.0 + y1, 1),
+                            round(box_var[2] / 2.0 + x1, 1),
+                            round(box_var[3] / 2.0 + y1, 1)
+                        ]
+                    else:
+                        final_box = [float(x1), float(y1), float(x2), float(y2)]
+                    return res_var, final_box
 
         return None, None
 
-    def _try_detect_qr(self, image: np.ndarray) -> Optional[str]:
-        text, _ = self._try_detect_qr_with_box(image)
-        return text
-
-
     def parse_qr_string(self, qr_str: str) -> Optional[Dict[str, Any]]:
-        parts = qr_str.split("|")
-
-        if len(parts) < 6:
-            logger.warning(f"[QR_PARSER] Invalid QR string format (parts={len(parts)})")
+        """
+        Parses pipe-delimited Vietnamese CCCD / Căn cước QR strings:
+        Format: CCCD_12 | CMND_9 | Full Name | Date of Birth (DDMMYYYY) | Gender | Address | Date of Issue (DDMMYYYY)
+        """
+        if not qr_str:
             return None
 
-        identity_number = parts[0].strip() if parts[0].strip().isdigit() and len(parts[0].strip()) == 12 else None
-        old_id_number = parts[1].strip() if len(parts[1].strip()) > 0 else None
-        
-        canonical_name, raw_clean_name = normalize_full_name(parts[2].strip()) if len(parts[2].strip()) > 0 else (None, None)
+        parts = [p.strip() for p in qr_str.split("|")]
+
+        if len(parts) < 6:
+            logger.warning(f"[QR_PARSER] QR string has insufficient pipe fields: {len(parts)}")
+            return None
+
+        identity_number = parts[0] if (parts[0].isdigit() and len(parts[0]) == 12) else None
+        old_id_number = parts[1] if len(parts[1]) > 0 else None
+
+        canonical_name, raw_clean_name = normalize_full_name(parts[2]) if len(parts[2]) > 0 else (None, None)
         full_name = raw_clean_name if raw_clean_name else canonical_name
-        date_of_birth = parse_date(parts[3].strip()) if len(parts[3].strip()) > 0 else None
-        gender = normalize_gender(parts[4].strip()) if len(parts[4].strip()) > 0 else None
-        
-        raw_address = parts[5].strip() if len(parts[5].strip()) > 0 else None
+        date_of_birth = parse_date(parts[3]) if len(parts[3]) > 0 else None
+        gender = normalize_gender(parts[4]) if len(parts[4]) > 0 else None
+
+        raw_address = parts[5] if len(parts[5]) > 0 else None
         place_of_residence, _ = normalize_address(raw_address) if raw_address else (None, None)
 
-        date_of_issue = parse_date(parts[6].strip()) if len(parts) > 6 and len(parts[6].strip()) > 0 else None
+        date_of_issue = parse_date(parts[6]) if len(parts) > 6 and len(parts[6]) > 0 else None
 
         result = {
             "identityNumber": identity_number,
