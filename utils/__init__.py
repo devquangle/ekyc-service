@@ -21,6 +21,7 @@ from utils.text_normalizer import (
 from utils.vietnamese_administrative_restorer import VietnameseAdministrativeRestorer
 from utils.card_aligner import CardAligner
 from utils.media_parser import parse_media_payload, decode_base64_media, extract_raw_bytes
+from utils.vietnam_address_parser import VietnamAddressParser, ParsedAddress, parse_address
 
 __all__ = [
     "logger",
@@ -43,4 +44,7 @@ __all__ = [
     "parse_media_payload",
     "decode_base64_media",
     "extract_raw_bytes",
+    "VietnamAddressParser",
+    "ParsedAddress",
+    "parse_address",
 ]

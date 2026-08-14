@@ -31,3 +31,6 @@ tests/images/
 tests/images
 image/
 images/
+
+# Auto-downloaded administrative address database cache (re-downloaded on first run)
+utils/vietnam_administrative_data.json
