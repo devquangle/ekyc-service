@@ -212,4 +212,10 @@ def test_hierarchical_fuzzy_restorer_provinces_and_districts():
     assert "Noi thurng" not in t6 and "Place of residence" not in t6
     assert "Ấp Tây" in t6 and "Tân Bình" in t6 and "Châu Thành" in t6 and "Đồng Tháp" in t6
 
+    # Test 7: c/Fcnc removal on new card residence field
+    t7 = VietnameseAdministrativeRestorer.restore_address_diacritics("c/Fcnc Tổ 9, Ap Phu Binh Tan Phu Trung, Dong Thap")
+    assert "c/Fcnc" not in t7 and "cfcnc" not in t7.lower()
+    assert "Tổ 9" in t7 and "Ấp Phú Bình" in t7 and "Tân Phú Trung" in t7 and "Đồng Tháp" in t7
+
+
 

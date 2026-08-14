@@ -831,8 +831,10 @@ class FieldExtractor:
 
         # 2. Aggressive field-specific label stripping
         if field_name == "placeOfResidence":
+            cleaned = re.sub(r'^(?:c\/fcnc|c\/f[a-z0-9]*|fcnc|cfcnc)\b[:\s\/._,-]*', '', cleaned, flags=re.IGNORECASE).strip()
             cleaned = re.sub(r'^(?:n[o\u01a1]i\s+)?(?:th[u\u01b0][o\u01a1]ng|thurng|c[u\u01b0]|thuong)\s*(?:tr[u\u00fa\u01b0]|tru)?\s*(?:[\/\-:\.]|\s+)*(?:place\s+of\s+residence|residence)?[:\s\/._]*', '', cleaned, flags=re.IGNORECASE).strip()
             cleaned = re.sub(r'^(?:place\s+of\s+residence|pace\s+of\s+residence|residence)[:\s\/._]*', '', cleaned, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r'^(?:c\/fcnc|c\/f[a-z0-9]*|fcnc|cfcnc)\b[:\s\/._,-]*', '', cleaned, flags=re.IGNORECASE).strip()
         elif field_name == "placeOfOrigin":
             cleaned = re.sub(r'^(?:qu[e\xea]\s+qu[a\xe1]n|noi\s+dang\s+ky\s+khai\s+sinh|dang\s+ky\s+khai\s+sinh|khai\s+sinh)\s*(?:[\/\-:\.]|\s+)*(?:place\s+of\s+origin|place\s+of\s+birth(?:\s+registration)?)?[:\s\/._]*', '', cleaned, flags=re.IGNORECASE).strip()
             cleaned = re.sub(r'^(?:place\s+of\s+origin|place\s+of\s+birth(?:\s+registration)?|pace\s+of\s+brth)[:\s\/._]*', '', cleaned, flags=re.IGNORECASE).strip()
