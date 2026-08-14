@@ -2,6 +2,7 @@ import numpy as np
 import pytest
 from unittest.mock import MagicMock
 from schemas.face import BoundingBoxInfo, FaceQualityMetrics, FaceVerifyResponse
+from schemas.enums import VerificationDecision
 from core.face_verification.face_alignment_service import FaceAlignmentService
 from core.face_verification.face_embedding_service import FaceEmbeddingService
 from core.face_verification.face_quality_service import FaceQualityService
@@ -12,8 +13,8 @@ from core.face_verification.face_verification_service import FaceVerificationSer
 
 def test_face_alignment_relative_coordinate_correction():
     """
-    Tests 5-point face alignment with global landmarks on a cropped ROI
-    to ensure landmarks are shifted correctly and no black/distorted crop occurs.
+    Tests 5-point face alignment with relative landmarks on a cropped ROI
+    to ensure landmarks are aligned accurately and no black/distorted crop occurs.
     """
     aligner = FaceAlignmentService()
 
@@ -22,6 +23,7 @@ def test_face_alignment_relative_coordinate_correction():
 
     # Global landmarks from full image where face bbox was [50, 60, 150, 180]
     bbox = [50, 60, 150, 180]
+    x1, y1 = 50, 60
     global_kps = np.array([
         [50 + 30, 60 + 40],   # Left eye
         [50 + 70, 60 + 40],   # Right eye
@@ -30,12 +32,19 @@ def test_face_alignment_relative_coordinate_correction():
         [50 + 65, 60 + 80],   # Right mouth
     ], dtype=np.float32)
 
-    aligned = aligner.align_face(face_crop, landmarks=global_kps, bbox=bbox, target_size=(112, 112))
+    # 1. Normalize landmarks relative to face_crop coordinates: relative_kps = global_kps - [x1, y1]
+    relative_kps = global_kps - np.array([x1, y1], dtype=np.float32)
+    aligned = aligner.align_face(face_crop, landmarks=relative_kps, target_size=(112, 112))
 
     assert aligned is not None
     assert aligned.shape == (112, 112, 3)
-    # Ensure image is not completely black
     assert np.mean(aligned) > 50
+
+    # 2. Also verify alignment when passing full global landmarks with bbox parameter
+    aligned_with_bbox = aligner.align_face(face_crop, landmarks=global_kps, bbox=bbox, target_size=(112, 112))
+    assert aligned_with_bbox is not None
+    assert aligned_with_bbox.shape == (112, 112, 3)
+    assert np.mean(aligned_with_bbox) > 50
 
 
 def test_face_alignment_fallback_resize():
@@ -70,7 +79,6 @@ def test_face_embedding_l2_normalization():
     """
     Tests FaceEmbeddingService L2 unit normalization.
     """
-    # Create mock recognition model returning raw 512-d vector
     mock_app = MagicMock()
     raw_vec = np.random.randn(512).astype(np.float32) * 5.0
     mock_rec = MagicMock()
@@ -140,7 +148,6 @@ def test_face_verification_full_pipeline_mock():
     mock_rec.get_feat.return_value = vec
     mock_app.models = {'recognition': mock_rec}
 
-    # Mock extractors returning detected face
     mock_card_ext = MagicMock()
     mock_card_ext.extract_face.return_value = (
         np.full((100, 100, 3), 120, dtype=np.uint8),
@@ -169,7 +176,7 @@ def test_face_verification_full_pipeline_mock():
     response = service.verify_faces(card_img, selfie_img)
 
     assert response.faceVerified is True
-    assert response.decision == "MATCH"
+    assert response.decision in [VerificationDecision.MATCH, "MATCH"]
     assert response.similarityScore >= 0.60
     assert response.cardFaceInfo.detected is True
     assert response.selfieFaceInfo.detected is True

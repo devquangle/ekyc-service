@@ -2,10 +2,11 @@ import os
 import sys
 import cv2
 import json
+from pathlib import Path
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if BASE_DIR not in sys.path:
-    sys.path.insert(0, BASE_DIR)
+BASE_DIR = Path(__file__).resolve().parent.parent
+if str(BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(BASE_DIR))
 
 from core.ocr_engine import OcrEngine
 from core.qr_engine import QrEngine
@@ -14,22 +15,21 @@ from processors.card_processor import CardProcessor
 from processors.card_validator import CardValidator
 
 
-
-def get_image_path(filename: str) -> str:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_dir, "image", filename)
+def get_image_path(filename: str) -> Path:
+    base_dir = Path(__file__).resolve().parent
+    return base_dir / "image" / filename
 
 
 def inspect_card(front_filename: str, back_filename: str):
     front_path = get_image_path(front_filename)
     back_path = get_image_path(back_filename)
 
-    if not os.path.exists(front_path) or not os.path.exists(back_path):
+    if not front_path.exists() or not back_path.exists():
         print(f"[WARN] Image files not found: {front_path}, {back_path}")
         return
 
-    front_img = cv2.imread(front_path)
-    back_img = cv2.imread(back_path)
+    front_img = cv2.imread(str(front_path))
+    back_img = cv2.imread(str(back_path))
 
     ocr_engine = OcrEngine()
     qr_engine = QrEngine()

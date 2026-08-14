@@ -1,7 +1,9 @@
+import pytest
 from processors.card_validator import CardValidator
 from processors.card_processor import CardProcessor
 from core.mrz_engine import MrzEngine
 from schemas.card import ExtractedCardData
+from schemas.enums import CardType, FieldValidationStatus
 
 
 def test_case1_matching_identity_number():
@@ -12,7 +14,7 @@ def test_case1_matching_identity_number():
     card_verified, cross_val_res, errors = validator.validate(ocr_data, None, mrz_data, card_type="CCCD_OLD")
     detail = next(d for d in cross_val_res.details if d.fieldName == "identityNumber")
 
-    assert detail.status == "MATCH"
+    assert detail.status in ["MATCH", FieldValidationStatus.MATCH]
     assert cross_val_res.ocrMatchMrz is True
     assert card_verified is True
 
@@ -25,7 +27,7 @@ def test_case2_mismatch_identity_number():
     card_verified, cross_val_res, errors = validator.validate(ocr_data, None, mrz_data, card_type="CCCD_OLD")
     detail = next(d for d in cross_val_res.details if d.fieldName == "identityNumber")
 
-    assert detail.status == "MISMATCH"
+    assert detail.status in ["MISMATCH", FieldValidationStatus.MISMATCH]
     assert cross_val_res.ocrMatchMrz is False
     assert card_verified is False
     assert "CARD_DATA_MISMATCH_IDENTITY_NUMBER" in errors
@@ -39,10 +41,9 @@ def test_case3_not_available_mrz_null():
     card_verified, cross_val_res, errors = validator.validate(ocr_data, None, mrz_data, card_type="CCCD_OLD")
     detail = next(d for d in cross_val_res.details if d.fieldName == "identityNumber")
 
-    assert detail.status == "NOT_AVAILABLE"
+    assert detail.status in ["NOT_AVAILABLE", FieldValidationStatus.NOT_AVAILABLE]
     assert cross_val_res.ocrMatchMrz is None
     assert "CARD_DATA_MISMATCH_IDENTITY_NUMBER" not in errors
-
 
 
 def test_case4_fullname_fallback_from_mrz():
@@ -64,7 +65,7 @@ def test_case5_status_not_available_single_source():
     _, cross_val_res, _ = validator.validate(ocr_data, None, mrz_data, card_type="CCCD_OLD")
     detail = next(d for d in cross_val_res.details if d.fieldName == "identityNumber")
 
-    assert detail.status == "NOT_AVAILABLE"
+    assert detail.status in ["NOT_AVAILABLE", FieldValidationStatus.NOT_AVAILABLE]
 
 
 def test_case6_value_only_in_ocr_not_mismatch():
@@ -74,7 +75,7 @@ def test_case6_value_only_in_ocr_not_mismatch():
     _, cross_val_res, errors = validator.validate(ocr_data, None, None, card_type="CCCD_OLD")
     detail = next(d for d in cross_val_res.details if d.fieldName == "identityNumber")
 
-    assert detail.status == "NOT_AVAILABLE"
+    assert detail.status in ["NOT_AVAILABLE", FieldValidationStatus.NOT_AVAILABLE]
     assert cross_val_res.ocrMatchMrz is None
     assert "CARD_DATA_MISMATCH_IDENTITY_NUMBER" not in errors
 
@@ -112,17 +113,17 @@ def test_card_validator_type_specific_comparators():
     qr_data = {"identityNumber": "087204000897", "fullName": "HUYNH QUANG LE", "gender": "Nam"}
     mrz_data = {"identityNumber": "087204000897", "fullName": "HUYNH QUANG LE", "gender": "Nam", "isMrzValid": True}
     
-    verified, res, _ = validator.validate(ocr_data, qr_data, mrz_data, card_type="CCCD_OLD")
+    verified, res, _ = validator.validate(ocr_data, qr_data, mrz_data, card_type=CardType.CCCD_OLD)
     g_detail = next(d for d in res.details if d.fieldName == "gender")
-    assert g_detail.status == "MATCH"
+    assert g_detail.status in ["MATCH", FieldValidationStatus.MATCH]
     assert verified is True
 
     # 2. Date: '04/10/2004' vs '2004-10-04' -> MATCH
     ocr_data_date = ExtractedCardData(dateOfBirth="2004-10-04", dateOfExpiry="2029-10-04")
     qr_data_date = {"dateOfBirth": "2004-10-04", "dateOfExpiry": "2029-10-04"}
-    _, res_date, _ = validator.validate(ocr_data_date, qr_data_date, None, card_type="CCCD_NEW")
+    _, res_date, _ = validator.validate(ocr_data_date, qr_data_date, None, card_type=CardType.CCCD_NEW)
     dob_detail = next(d for d in res_date.details if d.fieldName == "dateOfBirth")
-    assert dob_detail.status == "MATCH"
+    assert dob_detail.status in ["MATCH", FieldValidationStatus.MATCH]
 
 
 def test_card_processor_visual_regions_and_bounding_box_info(mocker):
@@ -169,4 +170,3 @@ def test_card_processor_visual_regions_and_bounding_box_info(mocker):
     assert visual_regions is not None
     assert visual_regions.portrait == [50.0, 100.0, 200.0, 300.0]
     assert visual_regions.qrCode == [450.0, 50.0, 600.0, 200.0]
-

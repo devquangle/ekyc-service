@@ -2,6 +2,7 @@ from schemas.enums import (
     CardType,
     VerificationDecision,
     CrossValidationStatus,
+    FieldValidationStatus,
     EkycOutcome,
     EkycExecutionStatus,
 )
@@ -28,6 +29,7 @@ __all__ = [
     "CardType",
     "VerificationDecision",
     "CrossValidationStatus",
+    "FieldValidationStatus",
     "EkycOutcome",
     "EkycExecutionStatus",
     # Card Schemas

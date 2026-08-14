@@ -155,8 +155,21 @@ class CardProcessResponse(BaseModel):
         validation_alias=AliasChoices("visual_regions", "visualRegions"),
         description="Snake_case alias for visualRegions"
     )
-    fieldMetadata: List[FieldMetadata] = Field(default_factory=list)
+    fieldMetadata: List[FieldMetadata] = Field(
+        default_factory=list,
+        validation_alias=AliasChoices("fieldMetadata", "field_metadata")
+    )
     errors: List[str] = Field(default_factory=list, description="List of card validation/processing errors or warnings")
+
+    @field_validator("fieldMetadata", mode="before")
+    @classmethod
+    def validate_field_metadata(cls, v: Any) -> List[Any]:
+        if isinstance(v, dict):
+            return list(v.values())
+        if isinstance(v, list):
+            return v
+        return []
+
 
     @model_validator(mode="before")
     @classmethod

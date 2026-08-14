@@ -9,16 +9,23 @@ from utils.logger import logger
 def decode_base64_media(data_str: str) -> Optional[bytes]:
     """
     Decodes standard Base64 or Data URI strings (e.g. data:image/jpeg;base64,...
-    or data:video/mp4;base64,...), handling URL safe padding and whitespaces.
+    or data:video/mp4;base64,...), handling URL safe padding, newlines and whitespaces.
     """
     if not data_str or not isinstance(data_str, str):
         return None
     try:
+        # 1. Strip Data URI header
         clean_str = re.sub(r'^data:(?:image|video)\/[a-zA-Z0-9+.-]+;base64,', '', data_str.strip())
-        # Add missing padding if necessary
+        # 2. Remove all whitespaces, newlines, carriage returns, tabs
+        clean_str = re.sub(r'[\r\n\t\s]+', '', clean_str)
+        if not clean_str:
+            return None
+
+        # 3. Add missing padding if necessary
         missing_padding = len(clean_str) % 4
         if missing_padding:
             clean_str += '=' * (4 - missing_padding)
+
         decoded = base64.b64decode(clean_str, validate=False)
         return decoded if decoded and len(decoded) > 10 else None
     except Exception as e:
@@ -148,22 +155,20 @@ async def parse_media_payload(
         except Exception as e:
             logger.warning(f"[MEDIA_PARSER] Error reading form data: {str(e)}")
 
-    # 3. Validation: Required Fields
+    # 3. Validate Required Fields & Payload Sizes
     if required_fields:
-        for req in required_fields:
-            if req not in extracted or extracted[req] is None or (isinstance(extracted[req], (bytes, str)) and len(extracted[req]) == 0):
-                primary_alias = alias_map.get(req, [req])[0]
-                raise HTTPException(
-                    status_code=status.HTTP_400_BAD_REQUEST,
-                    detail=f"Missing required field: '{primary_alias}'."
-                )
-
-    # 4. Validation: Maximum Size Limits
-    for fname, fval in extracted.items():
-        if isinstance(fval, (bytes, bytearray)) and len(fval) > max_bytes:
+        missing = [f for f in required_fields if extracted.get(f) is None]
+        if missing:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Field '{fname}' exceeds maximum allowed size limit of {max_size_mb}MB."
+                detail=f"Missing required field(s): {', '.join(missing)}"
+            )
+
+    for field_name, val in extracted.items():
+        if isinstance(val, (bytes, bytearray)) and len(val) > max_bytes:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Payload for '{field_name}' exceeds maximum allowed size ({max_size_mb} MB)."
             )
 
     return extracted

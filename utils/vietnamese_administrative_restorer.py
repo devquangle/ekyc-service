@@ -417,15 +417,26 @@ class VietnameseAdministrativeRestorer:
         if clean_q in candidates:
             return clean_q, candidates[clean_q], 100.0
 
+        # Adaptive threshold based on query string length
+        len_q = len(clean_q)
+        if len_q <= 4:
+            effective_threshold = max(threshold, 90.0)
+            max_len_diff = 1
+        elif len_q <= 7:
+            effective_threshold = max(threshold, 85.0)
+            max_len_diff = 2
+        else:
+            effective_threshold = threshold
+            max_len_diff = max(2, int(0.25 * len_q))
+
         # 2. Fuzzy match via RapidFuzz ratio
         if HAS_RAPIDFUZZ:
             best_match = None
             best_score = 0.0
 
-            len_q = len(clean_q)
             for cand_key, cand_val in candidates.items():
                 len_c = len(cand_key)
-                if abs(len_q - len_c) > max(2, int(0.25 * len_c)):
+                if abs(len_q - len_c) > max_len_diff:
                     continue
 
                 score = fuzz.ratio(clean_q, cand_key)
@@ -433,15 +444,15 @@ class VietnameseAdministrativeRestorer:
                     best_score = score
                     best_match = (cand_key, cand_val, float(score))
 
-            if best_match and best_score >= threshold:
+            if best_match and best_score >= effective_threshold:
                 return best_match
         else:
             import difflib
             for cand_key, cand_val in candidates.items():
-                if abs(len(clean_q) - len(cand_key)) > 2:
+                if abs(len(clean_q) - len(cand_key)) > max_len_diff:
                     continue
                 ratio = difflib.SequenceMatcher(None, clean_q, cand_key).ratio() * 100.0
-                if ratio >= threshold:
+                if ratio >= effective_threshold:
                     return cand_key, cand_val, ratio
 
         return None

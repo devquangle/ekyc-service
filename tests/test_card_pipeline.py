@@ -1,6 +1,8 @@
 import os
 import cv2
 import pytest
+from pathlib import Path
+
 from core.ocr_engine import OcrEngine
 from core.qr_engine import QrEngine
 from core.mrz_engine import MrzEngine
@@ -9,8 +11,8 @@ from processors.card_validator import CardValidator
 
 
 def get_image_path(filename: str) -> str:
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    return os.path.join(base_dir, "image", filename)
+    base_dir = Path(__file__).resolve().parent
+    return str(base_dir / "image" / filename)
 
 
 def test_card_pipeline_cccd_old_flow():

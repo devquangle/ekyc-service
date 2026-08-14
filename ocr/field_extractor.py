@@ -289,9 +289,17 @@ class FieldExtractor:
 
         kw_idx, kw_line, kw_str = kw_info
         is_expiry = (field_name == "dateOfExpiry")
+        clean_kw_line = remove_vietnamese_accents(kw_line.text).lower()
+
+        # Disambiguation: avoid matching expiry lines as birth lines
+        if field_name == "dateOfBirth" and any(w in clean_kw_line for w in ["het han", "expiry", "gia tri den"]) and not any(w in clean_kw_line for w in ["sinh", "birth"]):
+            return None
+        if field_name == "dateOfExpiry" and any(w in clean_kw_line for w in ["ngay sinh", "date of birth", "nam sinh"]) and not any(w in clean_kw_line for w in ["het han", "expiry", "gia tri"]):
+            return None
 
         # 1. Try inline match
         date_val = parse_date(kw_line.text, is_expiry=is_expiry)
+
         if date_val:
             val_tokens = [t for t in kw_line.tokens if parse_date(t.text, is_expiry=is_expiry) or re.search(r'\d', t.text)]
             lbl_tokens = self._get_label_tokens(kw_line, val_tokens)

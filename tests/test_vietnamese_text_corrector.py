@@ -1,5 +1,5 @@
 import pytest
-from services.text_normalizer import UnicodeNormalizer, MojibakeFixer, VietnameseTextCorrector
+from utils.text_normalizer import UnicodeNormalizer, MojibakeFixer, VietnameseTextCorrector
 from schemas.card import FieldMetadata
 
 

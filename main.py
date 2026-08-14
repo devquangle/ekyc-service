@@ -21,29 +21,30 @@ async def lifespan(app: FastAPI):
     Application Lifespan Manager: Pre-warms AI Models/Engines on startup
     and releases resources on shutdown.
     """
-    logger.info("Initializing Python eKYC Service AI Engines...")
+    if getattr(app.state, "orchestrator", None) is None:
+        logger.info("Initializing Python eKYC Service AI Engines...")
 
-    ocr_engine = OcrEngine()
-    qr_engine = QrEngine()
-    mrz_engine = MrzEngine()
-    face_engine = FaceEngine()
-    liveness_engine = LivenessEngine()
+        ocr_engine = getattr(app.state, "ocr_engine", None) or OcrEngine()
+        qr_engine = getattr(app.state, "qr_engine", None) or QrEngine()
+        mrz_engine = getattr(app.state, "mrz_engine", None) or MrzEngine()
+        face_engine = getattr(app.state, "face_engine", None) or FaceEngine()
+        liveness_engine = getattr(app.state, "liveness_engine", None) or LivenessEngine()
 
-    card_processor = CardProcessor(ocr_engine, qr_engine, mrz_engine)
-    card_validator = CardValidator()
-    orchestrator = EkycOrchestrator(card_processor, card_validator, face_engine, liveness_engine)
+        card_processor = getattr(app.state, "card_processor", None) or CardProcessor(ocr_engine, qr_engine, mrz_engine)
+        card_validator = getattr(app.state, "card_validator", None) or CardValidator()
+        orchestrator = EkycOrchestrator(card_processor, card_validator, face_engine, liveness_engine)
 
-    # Store in app.state for FastAPI Dependency Injection
-    app.state.ocr_engine = ocr_engine
-    app.state.qr_engine = qr_engine
-    app.state.mrz_engine = mrz_engine
-    app.state.face_engine = face_engine
-    app.state.liveness_engine = liveness_engine
-    app.state.card_processor = card_processor
-    app.state.card_validator = card_validator
-    app.state.orchestrator = orchestrator
+        # Store in app.state for FastAPI Dependency Injection
+        app.state.ocr_engine = ocr_engine
+        app.state.qr_engine = qr_engine
+        app.state.mrz_engine = mrz_engine
+        app.state.face_engine = face_engine
+        app.state.liveness_engine = liveness_engine
+        app.state.card_processor = card_processor
+        app.state.card_validator = card_validator
+        app.state.orchestrator = orchestrator
 
-    logger.info("All eKYC AI Engines initialized and pre-warmed successfully.")
+        logger.info("All eKYC AI Engines initialized and pre-warmed successfully.")
     yield
     logger.info("Shutting down eKYC Service...")
 

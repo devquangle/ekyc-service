@@ -4,12 +4,15 @@ from enum import Enum
 class CardType(str, Enum):
     CCCD_OLD = "CCCD_OLD"
     CCCD_NEW = "CCCD_NEW"
+    CMND_9 = "CMND_9"
+    CMND_12 = "CMND_12"
     UNKNOWN = "UNKNOWN"
 
 
 class VerificationDecision(str, Enum):
     MATCH = "MATCH"
     BORDERLINE = "BORDERLINE"
+    SUSPICIOUS = "SUSPICIOUS"
     MISMATCH = "MISMATCH"
 
 
@@ -21,6 +24,10 @@ class CrossValidationStatus(str, Enum):
     QR_ONLY = "QR_ONLY"
     MRZ_ONLY = "MRZ_ONLY"
     NOT_AVAILABLE = "NOT_AVAILABLE"
+
+
+# Alias for backward compatibility
+FieldValidationStatus = CrossValidationStatus
 
 
 class EkycOutcome(str, Enum):

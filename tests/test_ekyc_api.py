@@ -1,6 +1,71 @@
 import cv2
 import io
 import pytest
+from unittest.mock import MagicMock
+from schemas.card import CardProcessResponse, ExtractedCardData, QualityChecks, VisualRegions
+from schemas.face import FaceVerifyResponse
+from schemas.liveness import LivenessResponse
+from schemas.ekyc import FullEkycResponse
+from schemas.enums import EkycOutcome, EkycExecutionStatus, VerificationDecision, CardType
+
+
+@pytest.fixture(autouse=True)
+def mock_api_orchestrator(test_client):
+    """
+    Mocks app.state.orchestrator for fast, deterministic, CI/CD-compatible API endpoint testing.
+    """
+    mock_orch = MagicMock()
+    mock_orch.process_card.return_value = CardProcessResponse(
+        success=True,
+        cardType=CardType.CCCD_OLD,
+        cardVerified=True,
+        confidence=0.98,
+        extractedData=ExtractedCardData(
+            identityNumber="087204000897",
+            fullName="HUYNH QUANG LE",
+            dateOfBirth="2004-10-04",
+            gender="Nam",
+            nationality="Việt Nam",
+            placeOfOrigin="Tân Bình, Châu Thành, Đồng Tháp",
+            placeOfResidence="Ấp Tây Tân Bình, Châu Thành, Đồng Tháp",
+            dateOfExpiry="2029-10-04"
+        ),
+        qualityChecks=QualityChecks(blurScore=150.0, isBlurry=False, glareDetected=False, darkDetected=False, passed=True),
+        visualRegions=VisualRegions(portrait=[10.0, 10.0, 100.0, 100.0]),
+        fieldMetadata=[]
+    )
+    mock_orch.verify_face.return_value = FaceVerifyResponse(
+        faceVerified=True,
+        similarityScore=0.92,
+        threshold=0.60,
+        decision=VerificationDecision.MATCH,
+        margin=0.32,
+        errors=[]
+    )
+    mock_orch.detect_liveness.return_value = LivenessResponse(
+        livenessVerified=True,
+        livenessScore=0.95,
+        isLive=True,
+        isRealPerson=True,
+        antiSpoofScore=0.96,
+        spoofDetected=False,
+        checksPassed=["BLINK"],
+        errors=[]
+    )
+    mock_orch.process_full_ekyc.return_value = FullEkycResponse(
+        requestId="test-req-123",
+        ekycResult=EkycOutcome.EKYC_VERIFIED,
+        status=EkycExecutionStatus.SUCCESS,
+        cardResult=mock_orch.process_card.return_value,
+        faceResult=mock_orch.verify_face.return_value,
+        livenessResult=mock_orch.detect_liveness.return_value,
+        errors=[],
+        executionTimeMs=45.0
+    )
+
+    from main import app
+    app.state.orchestrator = mock_orch
+    yield mock_orch
 
 
 def test_health_endpoint(test_client):
@@ -68,7 +133,7 @@ def test_full_ekyc_api_endpoint(test_client, dummy_card_front_image, dummy_card_
 
     assert "requestId" in data
     assert "ekycResult" in data
-    assert data["ekycResult"] in ["EKYC_VERIFIED", "EKYC_NOT_VERIFIED"]
+    assert data["ekycResult"] in ["EKYC_VERIFIED", "EKYC_NOT_VERIFIED", EkycOutcome.EKYC_VERIFIED.value]
     assert "cardResult" in data
     assert "faceResult" in data
 

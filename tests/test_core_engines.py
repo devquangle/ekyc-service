@@ -2,12 +2,14 @@ import cv2
 import numpy as np
 import pytest
 from unittest.mock import MagicMock
+
 from core.anti_spoof_engine import AntiSpoofEngine, crop_face_roi_with_scale
 from core.liveness_engine import LivenessEngine
 from core.face_engine import FaceEngine
 from core.ocr_engine import OcrEngine
 from core.qr_engine import QrEngine
 from core.mrz_engine import MrzEngine
+from schemas.face import BoundingBoxInfo
 
 
 def test_crop_face_roi_with_scale():
@@ -27,10 +29,15 @@ def test_crop_face_roi_with_scale():
     assert roi_40 is not None
     assert roi_40.shape == (80, 80, 3)
 
+    # Test None / empty input
+    assert crop_face_roi_with_scale(None, bbox) is None
+    assert crop_face_roi_with_scale(img, ()) is None
+
 
 def test_anti_spoof_engine_fallback_texture():
     """
     Tests AntiSpoofEngine multi-metric texture fallback when models are not loaded.
+    Supports both full-frame and face_bbox modes.
     """
     engine = AntiSpoofEngine("nonexistent1.onnx", "nonexistent2.onnx")
 
@@ -39,10 +46,13 @@ def test_anti_spoof_engine_fallback_texture():
     score_black = engine.predict(black_frame)
     assert score_black == 0.0
 
-    # 2. Frame with natural texture -> score > 0
+    # 2. Frame with natural texture -> score in [0.0, 1.0]
     textured_frame = np.random.randint(50, 200, (200, 200, 3), dtype=np.uint8)
     score_textured = engine.predict(textured_frame, face_bbox=(20, 20, 150, 150))
     assert 0.0 <= score_textured <= 1.0
+
+    # 3. None / empty frame
+    assert engine.predict(None) == 0.0
 
 
 def test_liveness_engine_fails_safely_on_no_face():
@@ -93,7 +103,6 @@ def test_face_engine_extract_embedding_pipeline(monkeypatch):
 
     # Mock face crop with landmarks
     mock_card_ext = MagicMock()
-    from schemas.face import BoundingBoxInfo
     mock_card_ext.extract_face.return_value = (
         np.full((100, 100, 3), 120, dtype=np.uint8),
         np.array([[30, 30], [70, 30], [50, 50], [35, 70], [65, 70]], dtype=np.float32),
@@ -118,8 +127,9 @@ def test_qr_and_mrz_engine_wrappers():
     """
     mrz_engine = MrzEngine()
     # Test check digit
-    cd = mrz_engine.compute_check_digit("730101")
+    cd = mrz_engine.compute_check_digit("041004")
     assert isinstance(cd, int)
+    assert cd == 7
 
     qr_engine = QrEngine()
     parsed = qr_engine.parse_qr_string("086173011002|086173011002|TRAN THI UT|01011973|Nu|Tan Binh, Chau Thanh, Dong Thap|01012021")

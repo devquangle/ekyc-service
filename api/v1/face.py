@@ -22,7 +22,9 @@ FACE_FIELD_ALIASES = {
 
 
 @router.post("/ekyc/face/verify", response_model=FaceVerifyResponse, summary="Face Verification (Card Portrait vs Selfie)")
+@router.post("/face/verify", response_model=FaceVerifyResponse, summary="Alias for Face Verification (Card Portrait vs Selfie)")
 async def verify_face(
+
     request: Request,
     card_portrait: Optional[Union[UploadFile, str]] = File(None, description="Card image or cropped card portrait (Upload file or Base64 string)"),
     selfie_image: Optional[Union[UploadFile, str]] = File(None, description="Selfie photo of user (Upload file or Base64 string)"),

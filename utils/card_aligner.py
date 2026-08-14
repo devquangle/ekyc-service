@@ -19,10 +19,38 @@ def _order_points(pts: np.ndarray) -> np.ndarray:
     return rect
 
 
+def _get_quad_aspect_and_area(pts: np.ndarray) -> Tuple[float, float]:
+    """
+    Computes aspect ratio and approximate area of 4-point quadrilateral.
+    """
+    rect = _order_points(pts)
+    (tl, tr, br, bl) = rect
+    width = max(float(np.linalg.norm(br - bl)), float(np.linalg.norm(tr - tl)))
+    height = max(float(np.linalg.norm(tr - br)), float(np.linalg.norm(tl - bl)))
+    if width <= 0 or height <= 0:
+        return 0.0, 0.0
+    aspect = max(width, height) / min(width, height)
+    area = width * height
+    return aspect, area
+
+
 def _four_point_transform(image: np.ndarray, pts: np.ndarray) -> np.ndarray:
     """
     Applies perspective transform to straighten a quadrilateral region into a rectangle.
+    Validates ID-1 card aspect ratio (~1.586) to prevent severe geometric distortions.
     """
+    if image is None or pts is None or len(pts) != 4:
+        return image
+
+    aspect, area = _get_quad_aspect_and_area(pts)
+    h, w = image.shape[:2]
+
+    # Standard ID-1 aspect ratio is 85.6mm / 53.98mm = 1.586
+    # Must be between 1.35 and 1.85, and area at least 15% of frame
+    if aspect < 1.35 or aspect > 1.85 or area < 0.15 * (w * h):
+        logger.debug(f"[CARD_ALIGNER] Skipping warp: abnormal aspect ratio {aspect:.2f} or area {area:.0f}")
+        return image
+
     rect = _order_points(pts)
     (tl, tr, br, bl) = rect
 
@@ -34,8 +62,8 @@ def _four_point_transform(image: np.ndarray, pts: np.ndarray) -> np.ndarray:
     height_b = np.linalg.norm(tl - bl)
     max_height = max(int(height_a), int(height_b))
 
-    if max_width < 50 or max_height < 30:
-        return image  # too small, return original
+    if max_width < 100 or max_height < 60:
+        return image
 
     dst = np.array([
         [0, 0],
@@ -44,9 +72,16 @@ def _four_point_transform(image: np.ndarray, pts: np.ndarray) -> np.ndarray:
         [0, max_height - 1],
     ], dtype=np.float32)
 
-    M = cv2.getPerspectiveTransform(rect, dst)
-    warped = cv2.warpPerspective(image, M, (max_width, max_height))
-    return warped
+    try:
+        M = cv2.getPerspectiveTransform(rect, dst)
+        warped = cv2.warpPerspective(image, M, (max_width, max_height), flags=cv2.INTER_CUBIC)
+        # If output is vertical (height > width), rotate 90 degrees to horizontal
+        if warped.shape[0] > warped.shape[1]:
+            warped = cv2.rotate(warped, cv2.ROTATE_90_CLOCKWISE)
+        return warped
+    except Exception as e:
+        logger.warning(f"[CARD_ALIGNER] warpPerspective exception: {str(e)}")
+        return image
 
 
 class CardAligner:
@@ -54,14 +89,8 @@ class CardAligner:
     AI-powered Card Alignment module using YOLOv8-seg ONNX detection with
     OpenCV contour-based fallback. Detects 4 corners of an ID card and applies
     Perspective Transform to produce a straight, cropped card image.
-
-    Graceful Degradation:
-    - If ONNX model exists: YOLOv8-seg detects card mask → extract corners → warpPerspective
-    - If ONNX model missing: OpenCV Canny + contour detection → warpPerspective
-    - If both fail: returns original image unchanged (no crash)
     """
 
-    # YOLOv8 ONNX input size
     INPUT_SIZE = (640, 640)
 
     def __init__(self, model_path: str = "weights/card_seg.onnx"):
@@ -88,8 +117,6 @@ class CardAligner:
         """
         Detects and aligns ID card in the image.
         Returns: (aligned_image, was_aligned)
-        - aligned_image: perspective-corrected card, or original if detection fails
-        - was_aligned: True if perspective transform was applied
         """
         if image is None or image.size == 0:
             return image, False
@@ -99,7 +126,7 @@ class CardAligner:
                 pts = self._detect_with_onnx(image)
                 if pts is not None:
                     aligned = _four_point_transform(image, pts)
-                    if aligned is not image:
+                    if aligned is not image and aligned.size > 0:
                         logger.info(f"[CARD_ALIGNER] ONNX alignment applied. Output shape: {aligned.shape}")
                         return aligned, True
 
@@ -107,7 +134,7 @@ class CardAligner:
             pts = self._detect_with_contour(image)
             if pts is not None:
                 aligned = _four_point_transform(image, pts)
-                if aligned is not image:
+                if aligned is not image and aligned.size > 0:
                     logger.info(f"[CARD_ALIGNER] Contour fallback alignment applied. Output shape: {aligned.shape}")
                     return aligned, True
 
@@ -119,8 +146,7 @@ class CardAligner:
     def _detect_with_onnx(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
         Runs YOLOv8-seg ONNX inference to detect card segmentation mask.
-        Extracts convex hull 4-corner approximation from the largest mask.
-        Returns 4-point array (shape [4,2]) or None.
+        Extracts quadrilateral corners from the segmentation mask or rotated rectangle.
         """
         if self.session is None:
             return None
@@ -137,25 +163,43 @@ class CardAligner:
             logger.warning(f"[CARD_ALIGNER] ONNX inference error: {e}")
             return None
 
-        # YOLOv8-seg outputs[0]: detection boxes [1, 8400, nc+4+mask_dim]
-        # outputs[1]: proto masks [1, 32, 160, 160]
-        # Parse boxes to find highest confidence detection
         if not outputs or outputs[0] is None:
             return None
 
         preds = outputs[0][0]  # shape: [8400, nc+4+32]
-        # Columns: cx, cy, w, h, [cls_scores...], [mask_coeffs...]
         num_classes = max(1, preds.shape[1] - 4 - 32)
         class_scores = preds[:, 4:4 + num_classes]
         conf = np.max(class_scores, axis=1)
-        best_idx = int(np.argmax(conf))
 
+        best_idx = int(np.argmax(conf))
         if conf[best_idx] < 0.40:
             return None
 
-        # Reconstruct mask from proto (simplified: use bbox as quadrilateral)
+        # Try mask reconstruction if proto masks (outputs[1]) are available
+        if len(outputs) > 1 and outputs[1] is not None:
+            try:
+                mask_coeffs = preds[best_idx, 4 + num_classes:]  # [32]
+                proto = outputs[1][0]  # [32, 160, 160]
+                c, mh, mw = proto.shape
+                proto_flat = proto.reshape(c, mh * mw)
+                mask_flat = np.dot(mask_coeffs, proto_flat)
+                mask = 1.0 / (1.0 + np.exp(-mask_flat))  # sigmoid
+                mask = mask.reshape(mh, mw)
+                mask_bin = (mask > 0.5).astype(np.uint8) * 255
+                mask_full = cv2.resize(mask_bin, (w, h), interpolation=cv2.INTER_NEAREST)
+
+                contours, _ = cv2.findContours(mask_full, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+                if contours:
+                    max_c = max(contours, key=cv2.contourArea)
+                    if cv2.contourArea(max_c) > 0.15 * (w * h):
+                        rot_rect = cv2.minAreaRect(max_c)
+                        box_pts = cv2.boxPoints(rot_rect).astype(np.float32)
+                        return box_pts
+            except Exception as e:
+                logger.debug(f"[CARD_ALIGNER] Proto mask parsing fallback: {e}")
+
+        # Fallback to bounding box prediction
         cx, cy, bw, bh = preds[best_idx, :4]
-        # Scale back to original image coordinates
         x1 = int((cx - bw / 2) * w / self.INPUT_SIZE[0])
         y1 = int((cy - bh / 2) * h / self.INPUT_SIZE[1])
         x2 = int((cx + bw / 2) * w / self.INPUT_SIZE[0])
@@ -164,8 +208,7 @@ class CardAligner:
         x1, y1 = max(0, x1), max(0, y1)
         x2, y2 = min(w, x2), min(h, y2)
 
-        # Ensure minimum area
-        if (x2 - x1) * (y2 - y1) < 0.10 * w * h:
+        if (x2 - x1) * (y2 - y1) < 0.15 * w * h:
             return None
 
         pts = np.array([[x1, y1], [x2, y1], [x2, y2], [x1, y2]], dtype=np.float32)
@@ -174,8 +217,7 @@ class CardAligner:
     def _detect_with_contour(self, image: np.ndarray) -> Optional[np.ndarray]:
         """
         Detects card boundary using OpenCV edge detection and contour approximation.
-        Finds the largest quadrilateral contour that resembles an ID card.
-        Returns 4-point array (shape [4,2]) or None.
+        Finds the largest quadrilateral contour matching ID-1 card aspect ratio.
         """
         h, w = image.shape[:2]
         image_area = h * w
@@ -208,23 +250,27 @@ class CardAligner:
 
         for contour in contours[:5]:
             area = cv2.contourArea(contour)
-            if area < 0.10 * image_area:
+            if area < 0.20 * image_area:
                 continue
 
-            # Approximate polygon
+            # 1. Try minAreaRect
+            rot_rect = cv2.minAreaRect(contour)
+            box_w, box_h = rot_rect[1]
+            if box_w > 0 and box_h > 0:
+                rect_area = box_w * box_h
+                if rect_area >= 0.20 * image_area:
+                    ratio = max(box_w, box_h) / min(box_w, box_h)
+                    if 1.35 <= ratio <= 1.85:
+                        box_pts = cv2.boxPoints(rot_rect).astype(np.float32)
+                        return box_pts
+
+            # 2. Approximate polygon
             peri = cv2.arcLength(contour, True)
             approx = cv2.approxPolyDP(contour, 0.02 * peri, True)
-
             if len(approx) == 4:
                 pts = approx.reshape(4, 2).astype(np.float32)
-                return pts
-
-            # If not exactly 4, try convex hull and re-approximate
-            hull = cv2.convexHull(contour)
-            hull_peri = cv2.arcLength(hull, True)
-            hull_approx = cv2.approxPolyDP(hull, 0.02 * hull_peri, True)
-            if len(hull_approx) == 4:
-                pts = hull_approx.reshape(4, 2).astype(np.float32)
-                return pts
+                aspect, q_area = _get_quad_aspect_and_area(pts)
+                if q_area >= 0.20 * image_area and 1.35 <= aspect <= 1.85:
+                    return pts
 
         return None

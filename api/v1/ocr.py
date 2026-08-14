@@ -22,7 +22,10 @@ CARD_FIELD_ALIASES = {
 
 
 @router.post("/ekyc/card", response_model=CardProcessResponse, summary="Extract and Validate ID Card Data (OCR, QR, MRZ)")
+@router.post("/card/process", response_model=CardProcessResponse, summary="Alias for Extract and Validate ID Card Data")
+@router.post("/card", response_model=CardProcessResponse, summary="Alias for Extract and Validate ID Card Data")
 async def extract_card(
+
     request: Request,
     front_image: Optional[Union[UploadFile, str]] = File(None, description="Front side ID card image (Upload file or Base64 string)"),
     back_image: Optional[Union[UploadFile, str]] = File(None, description="Back side ID card image (Upload file or Base64 string)"),

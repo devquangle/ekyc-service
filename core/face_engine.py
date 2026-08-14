@@ -23,12 +23,18 @@ class FaceEngine:
         try:
             import insightface
             from insightface.app import FaceAnalysis
+            import onnxruntime as ort
 
-            ctx_id = 0 if settings.DEVICE.lower() == "cuda" else -1
+            available_providers = ort.get_available_providers()
+            use_cuda = (settings.DEVICE.lower() == "cuda" and "CUDAExecutionProvider" in available_providers)
+            ctx_id = 0 if use_cuda else -1
+            providers = ["CUDAExecutionProvider", "CPUExecutionProvider"] if use_cuda else ["CPUExecutionProvider"]
+
             self.app = FaceAnalysis(
                 name=settings.INSIGHTFACE_MODEL_NAME,
                 root=settings.MODEL_DIR,
-                allowed_modules=['detection', 'recognition']
+                allowed_modules=['detection', 'recognition'],
+                providers=providers
             )
             self.app.prepare(ctx_id=ctx_id, det_size=(640, 640))
             logger.info("[FACE_ENGINE] InsightFace engine initialized successfully.")

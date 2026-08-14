@@ -1,5 +1,13 @@
 import numpy as np
+import pytest
+from unittest.mock import MagicMock
 from core.face_engine import FaceEngine
+from schemas.face import BoundingBoxInfo
+
+
+@pytest.fixture(autouse=True)
+def mock_face_engine_model(monkeypatch):
+    monkeypatch.setattr(FaceEngine, "_initialize_model", lambda self: None)
 
 
 def test_face_similarity_calculation():
@@ -24,6 +32,11 @@ def test_face_similarity_calculation():
 
 def test_crop_portrait_from_card(dummy_card_front_image):
     engine = FaceEngine()
+    # Mock card extractor return
+    mock_crop = np.full((120, 100, 3), 200, dtype=np.uint8)
+    engine.verification_service.card_extractor.extract_face = MagicMock(
+        return_value=(mock_crop, np.zeros((5, 2)), BoundingBoxInfo(detected=True, bbox=[80, 180, 180, 300]), [])
+    )
     cropped = engine.crop_portrait_from_card(dummy_card_front_image)
     assert cropped is not None
     assert cropped.shape[0] > 0 and cropped.shape[1] > 0

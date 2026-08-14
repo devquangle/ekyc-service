@@ -4,10 +4,12 @@ import pytest
 from unittest.mock import MagicMock
 from fastapi.testclient import TestClient
 from main import app
+from api.dependencies import get_orchestrator
 from schemas.card import CardProcessResponse, ExtractedCardData, QualityChecks, VisualRegions
 from schemas.face import FaceVerifyResponse
 from schemas.liveness import LivenessResponse
 from schemas.ekyc import FullEkycResponse
+from schemas.enums import CardType, VerificationDecision, EkycOutcome, EkycExecutionStatus
 
 
 @pytest.fixture(scope="module")
@@ -17,17 +19,17 @@ def real_images_dir():
 
 
 @pytest.fixture(autouse=True)
-def mock_orchestrator():
+def mock_orchestrator_dependency():
     """
-    Sets up mock orchestrator in app.state to test endpoint input validation,
-    non-blocking execution and multi-format payload parsing instantly.
+    Standard FastAPI Dependency Override fixture.
+    Mocks get_orchestrator to return a pre-configured mock orchestrator
+    with 100% Pydantic V2 schema compliant return types, and cleans up after tests.
     """
     mock_orch = MagicMock()
     mock_orch.process_card.return_value = CardProcessResponse(
-        success=True,
-        cardType="CCCD_OLD",
         cardVerified=True,
-        confidence=0.98,
+        cardType=CardType.CCCD_OLD,
+        cardTypeConfidence=0.98,
         extractedData=ExtractedCardData(
             identityNumber="086173011002",
             fullName="TRAN THI UT",
@@ -38,39 +40,41 @@ def mock_orchestrator():
             placeOfResidence="Tân Bình, Châu Thành, Đồng Tháp",
             dateOfExpiry="2033-01-01"
         ),
-        qualityChecks=QualityChecks(blurScore=150.0, isBlurry=False, glareDetected=False, darkDetected=False, passed=True),
+        qualityChecks=QualityChecks(isBlur=False, hasGlare=False, isCropped=False),
         visualRegions=VisualRegions(portrait=[10.0, 10.0, 100.0, 100.0]),
-        fieldMetadata=[]
+        fieldMetadata=[],
+        errors=[]
     )
     mock_orch.verify_face.return_value = FaceVerifyResponse(
         faceVerified=True,
         similarityScore=0.92,
         threshold=0.60,
-        decision="MATCH",
+        decision=VerificationDecision.MATCH,
         margin=0.32,
         errors=[]
     )
     mock_orch.detect_liveness.return_value = LivenessResponse(
         livenessVerified=True,
         livenessScore=0.95,
-        isLive=True,
-        isRealPerson=True,
-        antiSpoofScore=0.96,
-        spoofDetected=False,
+        threshold=0.80,
         checksPassed=["BLINK", "HEAD_TURN"],
         errors=[]
     )
     mock_orch.process_full_ekyc.return_value = FullEkycResponse(
-        status="SUCCESS",
-        ekycResult="EKYC_VERIFIED",
+        requestId="test-request-id-12345",
+        status=EkycExecutionStatus.SUCCESS,
+        ekycResult=EkycOutcome.EKYC_VERIFIED,
         executionTimeMs=120.5,
         cardResult=mock_orch.process_card.return_value,
         faceResult=mock_orch.verify_face.return_value,
         livenessResult=mock_orch.detect_liveness.return_value,
         failureReasons=[]
     )
-    app.state.orchestrator = mock_orch
-    return mock_orch
+
+    # Standard FastAPI dependency override
+    app.dependency_overrides[get_orchestrator] = lambda: mock_orch
+    yield mock_orch
+    app.dependency_overrides.clear()
 
 
 def test_api_card_multipart_and_json(real_images_dir):
@@ -94,6 +98,7 @@ def test_api_card_multipart_and_json(real_images_dir):
         r_file = client.post("/api/v1/ekyc/card", files=files)
     assert r_file.status_code == 200
     assert r_file.json()["extractedData"]["identityNumber"] == "086173011002"
+    assert r_file.json()["cardVerified"] is True
 
     # B. JSON Base64 Payload
     with open(front_path, "rb") as f:
@@ -166,7 +171,7 @@ def test_api_liveness_and_full_ekyc(real_images_dir):
     assert r_live.status_code == 200
     assert r_live.json()["livenessVerified"] is True
 
-    # Full eKYC Endpoint
+    # Full eKYC Endpoint (/api/v1/ekyc/verify)
     r_ekyc = client.post(
         "/api/v1/ekyc/verify",
         json={

@@ -29,7 +29,9 @@ EKYC_FIELD_ALIASES = {
 
 
 @router.post("/ekyc/verify", response_model=FullEkycResponse, summary="Full Orchestrated eKYC Verification Pipeline")
+@router.post("/ekyc/full", response_model=FullEkycResponse, summary="Alias for Full Orchestrated eKYC Verification Pipeline")
 async def process_full_ekyc(
+
     request: Request,
     front_image: Optional[Union[UploadFile, str]] = File(None, description="Front side ID card image (Upload file or Base64 string)"),
     back_image: Optional[Union[UploadFile, str]] = File(None, description="Back side ID card image (Upload file or Base64 string)"),

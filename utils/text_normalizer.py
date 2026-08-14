@@ -84,7 +84,6 @@ class MojibakeFixer:
             for encoding in ('cp1252', 'iso-8859-1', 'latin1'):
                 try:
                     reencoded = fixed.encode(encoding).decode('utf-8')
-                    # Validate if re-encoding actually increased Vietnamese vowels
                     if cls._count_vietnamese_chars(reencoded) >= cls._count_vietnamese_chars(fixed):
                         fixed = reencoded
                         break
@@ -98,13 +97,14 @@ class MojibakeFixer:
             fixed
         )
 
-        # Step 5: Safe post-fix for residual double-encoded sequences
+        # Step 5: Post-fix standalone characters and sequences
         fixed = (
             fixed
             .replace('Ä‘', 'đ')
             .replace('Ä\x91', 'đ')
             .replace('\xc4\u2018', 'đ')
             .replace('Ä\x90', 'Đ')
+            .replace('Ä', 'Đ')
         )
 
         return UnicodeNormalizer.normalize(fixed)
@@ -127,7 +127,17 @@ class VietnameseTextCorrector:
         """
         if not text:
             return ""
-        return "".join(cls.OCR_DIACRITIC_MAP.get(c, c) for c in text)
+        # Handle diphthongs like 'ưö' -> 'ươ', 'uö' -> 'ươ', 'ƯÖ' -> 'ƯƠ', 'UÖ' -> 'ƯƠ'
+        t = (
+            text
+            .replace('ưö', 'ươ')
+            .replace('uö', 'ươ')
+            .replace('ƯÖ', 'ƯƠ')
+            .replace('UÖ', 'ƯƠ')
+            .replace('ưÖ', 'ươ')
+            .replace('uÖ', 'ươ')
+        )
+        return "".join(cls.OCR_DIACRITIC_MAP.get(c, c) for c in t)
 
     @classmethod
     def format_spacing_and_punctuation(cls, text: Optional[str]) -> str:
@@ -156,10 +166,16 @@ class VietnameseTextCorrector:
             r'\1 \2',
             cleaned
         )
+        # Remove spaces around slashes in dates: "04 / 10 / 2004" -> "04/10/2004"
+        cleaned = re.sub(r'(\d+)\s*\/\s*(\d+)\s*\/\s*(\d+)', r'\1/\2/\3', cleaned)
         # Collapse newlines, tabs, and multiple spaces into single space
         cleaned = re.sub(r'[\r\n\t]+', ' ', cleaned)
         cleaned = re.sub(r'\s+', ' ', cleaned)
         return cleaned.strip()
+
+    # Aliases for backward compatibility
+    correct_vietnamese_ocr_glyphs = correct_ocr_glyphs
+    clean_spacing_and_punctuation = format_spacing_and_punctuation
 
     @classmethod
     def normalize_pipeline(
