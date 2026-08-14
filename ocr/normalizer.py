@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Optional, Tuple
 from utils.text_utils import remove_vietnamese_accents
 from utils.text_normalizer import UnicodeNormalizer, MojibakeFixer, VietnameseTextCorrector
+from utils.vietnamese_administrative_restorer import VietnameseAdministrativeRestorer
 
 
 def normalize_unicode(text: Optional[str]) -> Optional[str]:
@@ -145,8 +146,8 @@ def normalize_full_name(raw_name: Optional[str]) -> Tuple[Optional[str], Optiona
 def normalize_address(raw_address: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """
     Normalizes administrative address preserving original word boundaries, accents, and casing.
+    Applies data-driven administrative diacritics restoration from official GSO gazetteer.
     Returns a tuple of (normalized_value, clean_raw_text).
-    Does NOT alter administrative names or remove accents.
     """
     if not raw_address:
         return None, None
@@ -155,7 +156,8 @@ def normalize_address(raw_address: Optional[str]) -> Tuple[Optional[str], Option
     if not ocr_val:
         return None, None
 
-    return ocr_val, ocr_val
+    restored = VietnameseAdministrativeRestorer.restore_address_diacritics(ocr_val)
+    return (restored or ocr_val), ocr_val
 
 
 def normalize_address_for_compare(raw_address: Optional[str]) -> Optional[str]:

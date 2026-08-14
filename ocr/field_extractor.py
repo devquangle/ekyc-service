@@ -815,6 +815,10 @@ class FieldExtractor:
             unaccented_regex = r'^.*?(?:' + '|'.join(unaccented_patterns) + r')[:\s\/._]*'
             cleaned = re.sub(unaccented_regex, '', line_text, flags=re.IGNORECASE).strip()
 
+        # Strip remaining noisy English label remnants at the start (e.g. "Pace of brth", "Place of birth", "Place of origin")
+        en_patterns = r'^(?:place\s+of\s+birth(?:\s+registration)?|pace\s+of\s+brth|place\s+of\s+origin|place\s+of\s+residence|date\s+of\s+issue|date\s+of\s+expiry|date,\s*month,\s*year|surname,\s*given\s*names|full\s*name|personal\s*identification\s*number|no\.?|sex|nationality)[:\s\/._]*'
+        cleaned = re.sub(en_patterns, '', cleaned, flags=re.IGNORECASE).strip()
+
         if cleaned and len(cleaned) > 0 and cleaned != line_text:
             return cleaned
 

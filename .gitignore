@@ -23,3 +23,11 @@ weights/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Test images & dataset assets
+tests/image/
+tests/image
+tests/images/
+tests/images
+image/
+images/

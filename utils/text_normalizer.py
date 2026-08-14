@@ -111,8 +111,13 @@ class VietnameseTextCorrector:
         if not text:
             return ""
 
+        # Convert period between words into comma + space: 'Phu Trung. Dong Thap' -> 'Phu Trung, Dong Thap'
+        cleaned = re.sub(r'([a-zA-Z\d\u00C0-\u1EF9])\.\s+([a-zA-Z\u00C0-\u1EF9])', r'\1, \2', text)
+        cleaned = re.sub(r'([a-zA-Z\d\u00C0-\u1EF9])\.(?=[A-Z\u00C0-\u1EF9])', r'\1, ', cleaned)
+        # Normalize unit abbreviation like T09 or T.09 or T9 before Ap / Thon to Tổ
+        cleaned = re.sub(r'\bT0?(\d+)\b(?=\s*[,.]?\s*(?:Ap|Ấp|Thon|Thôn|Khom|Khóm|Khu|Xa|Xã|Phu|Binh))', r'Tổ \1', cleaned)
         # Remove spaces preceding commas, periods, colons, semicolons
-        cleaned = re.sub(r'\s+([,.:;])', r'\1', text)
+        cleaned = re.sub(r'\s+([,.:;])', r'\1', cleaned)
         # Ensure single space after punctuation when followed immediately by alphanumeric
         cleaned = re.sub(r'([,.:;])([^\s\d,.:;])', r'\1 \2', cleaned)
         # Separate OCR-concatenated words where lowercase is immediately followed by uppercase

@@ -16,6 +16,7 @@ from utils.text_normalizer import (
     MojibakeFixer,
     VietnameseTextCorrector,
 )
+from utils.vietnamese_administrative_restorer import VietnameseAdministrativeRestorer
 from utils.card_aligner import CardAligner
 
 __all__ = [
