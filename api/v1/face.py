@@ -1,7 +1,7 @@
 import base64
 import re
-from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Request
+from typing import Optional, Any
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from api.dependencies import get_orchestrator
 from schemas.face import FaceVerifyResponse
 from services.ekyc_orchestrator import EkycOrchestrator
@@ -22,15 +22,31 @@ def _decode_b64_image(b64_str: str) -> Optional[bytes]:
         return None
 
 
+async def _extract_image_bytes(val: Any) -> Optional[bytes]:
+    if val is None:
+        return None
+    if hasattr(val, "read"):
+        data = await val.read()
+        return data if data else None
+    if isinstance(val, bytes):
+        return val
+    if isinstance(val, str) and len(val) > 0:
+        b64 = _decode_b64_image(val)
+        if b64 and len(b64) > 10:
+            return b64
+        for enc in ('latin1', 'utf-8'):
+            try:
+                b = val.encode(enc)
+                if len(b) > 10 and (b.startswith(b'\xff\xd8') or b.startswith(b'\x89PNG') or b.startswith(b'RIFF')):
+                    return b
+            except Exception:
+                pass
+    return None
+
+
 @router.post("/ekyc/face/verify", response_model=FaceVerifyResponse, summary="Face Verification (Card Portrait vs Selfie)")
 async def verify_face(
     request: Request,
-    card_portrait: Optional[UploadFile] = File(None, description="Front side card image or cropped card portrait"),
-    selfie_image: Optional[UploadFile] = File(None, description="Selfie image of user"),
-    cardPortrait: Optional[UploadFile] = File(None, description="CamelCase alias for card_portrait"),
-    selfieImage: Optional[UploadFile] = File(None, description="CamelCase alias for selfie_image"),
-    card_image: Optional[UploadFile] = File(None, description="Alias for card_portrait"),
-    front_image: Optional[UploadFile] = File(None, description="Alias for card_portrait"),
     orchestrator: EkycOrchestrator = Depends(get_orchestrator)
 ):
     card_bytes = None
@@ -43,25 +59,26 @@ async def verify_face(
     if "application/json" in content_type:
         try:
             body = await request.json()
-            c_b64 = (
-                body.get("card_portrait")
-                or body.get("cardPortrait")
-                or body.get("card_image")
-                or body.get("cardImage")
-                or body.get("front_image")
-                or body.get("frontImage")
-            )
-            s_b64 = (
-                body.get("selfie_image")
-                or body.get("selfieImage")
-                or body.get("selfie")
-                or body.get("face_image")
-                or body.get("faceImage")
-            )
-            if c_b64:
-                card_bytes = _decode_b64_image(c_b64)
-            if s_b64:
-                selfie_bytes = _decode_b64_image(s_b64)
+            if isinstance(body, dict):
+                c_val = (
+                    body.get("card_portrait")
+                    or body.get("cardPortrait")
+                    or body.get("card_image")
+                    or body.get("cardImage")
+                    or body.get("front_image")
+                    or body.get("frontImage")
+                    or body.get("card")
+                )
+                s_val = (
+                    body.get("selfie_image")
+                    or body.get("selfieImage")
+                    or body.get("selfie")
+                    or body.get("face_image")
+                    or body.get("faceImage")
+                    or body.get("face")
+                )
+                card_bytes = await _extract_image_bytes(c_val)
+                selfie_bytes = await _extract_image_bytes(s_val)
         except Exception as json_err:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -70,50 +87,43 @@ async def verify_face(
 
     # 2. Multipart form upload
     if card_bytes is None or selfie_bytes is None:
-        c_file = card_portrait or cardPortrait or card_image or front_image
-        s_file = selfie_image or selfieImage
-
         try:
             form = await request.form()
-            if not c_file and not card_bytes:
+            if not card_bytes:
                 for key in ["card_portrait", "cardPortrait", "card_image", "cardImage", "front_image", "frontImage", "card"]:
                     if key in form:
-                        val = form[key]
-                        if hasattr(val, "read"):
-                            c_file = val
+                        card_bytes = await _extract_image_bytes(form[key])
+                        if card_bytes:
                             break
-                        elif isinstance(val, str) and len(val) > 20:
-                            card_bytes = _decode_b64_image(val)
-                            break
-            if not s_file and not selfie_bytes:
+            if not selfie_bytes:
                 for key in ["selfie_image", "selfieImage", "selfie", "face_image", "faceImage", "face"]:
                     if key in form:
-                        val = form[key]
-                        if hasattr(val, "read"):
-                            s_file = val
-                            break
-                        elif isinstance(val, str) and len(val) > 20:
-                            selfie_bytes = _decode_b64_image(val)
+                        selfie_bytes = await _extract_image_bytes(form[key])
+                        if selfie_bytes:
                             break
         except Exception:
             pass
 
-        if c_file and hasattr(c_file, "read"):
-            card_bytes = await c_file.read()
-        if s_file and hasattr(s_file, "read"):
-            selfie_bytes = await s_file.read()
-
-    if not card_bytes or not selfie_bytes:
+    if not card_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing required images. Please provide both 'card_portrait' (or 'cardPortrait') and 'selfie_image' (or 'selfieImage')."
+            detail="Missing required card_portrait (or cardImage/front_image)."
+        )
+
+    if not selfie_bytes:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Missing required selfie_image (or selfieImage/face)."
         )
 
     if len(card_bytes) > max_size_bytes or len(selfie_bytes) > max_size_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Image size exceeds maximum allowed limit."
+            detail=f"Image size exceeds maximum limit of {settings.MAX_IMAGE_SIZE_MB}MB."
         )
 
-    response = orchestrator.verify_face(card_bytes, selfie_bytes)
+    response = orchestrator.verify_face(
+        card_image_bytes=card_bytes,
+        selfie_image_bytes=selfie_bytes
+    )
     return response

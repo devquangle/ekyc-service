@@ -1,7 +1,7 @@
 import base64
 import re
-from typing import Optional
-from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Request
+from typing import Optional, Any
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from api.dependencies import get_orchestrator
 from schemas.ekyc import FullEkycResponse
 from services.ekyc_orchestrator import EkycOrchestrator
@@ -22,17 +22,31 @@ def _decode_b64_image(b64_str: str) -> Optional[bytes]:
         return None
 
 
+async def _extract_bytes(val: Any) -> Optional[bytes]:
+    if val is None:
+        return None
+    if hasattr(val, "read"):
+        data = await val.read()
+        return data if data else None
+    if isinstance(val, bytes):
+        return val
+    if isinstance(val, str) and len(val) > 0:
+        b64 = _decode_b64_image(val)
+        if b64 and len(b64) > 10:
+            return b64
+        for enc in ('latin1', 'utf-8'):
+            try:
+                b = val.encode(enc)
+                if len(b) > 20:
+                    return b
+            except Exception:
+                pass
+    return None
+
+
 @router.post("/ekyc/verify", response_model=FullEkycResponse, summary="Full Orchestrated eKYC Verification Pipeline")
 async def process_full_ekyc(
     request: Request,
-    front_image: Optional[UploadFile] = File(None, description="Front side image of ID card"),
-    back_image: Optional[UploadFile] = File(None, description="Back side image of ID card"),
-    frontImage: Optional[UploadFile] = File(None, description="CamelCase alias for front_image"),
-    backImage: Optional[UploadFile] = File(None, description="CamelCase alias for back_image"),
-    selfie_image: Optional[UploadFile] = File(None, description="Selfie photo for face verification"),
-    selfieImage: Optional[UploadFile] = File(None, description="CamelCase alias for selfie_image"),
-    video_file: Optional[UploadFile] = File(None, description="Video file for liveness verification"),
-    videoFile: Optional[UploadFile] = File(None, description="CamelCase alias for video_file"),
     orchestrator: EkycOrchestrator = Depends(get_orchestrator)
 ):
     front_bytes = None
@@ -49,18 +63,15 @@ async def process_full_ekyc(
     if "application/json" in content_type:
         try:
             body = await request.json()
-            f_b64 = body.get("front_image") or body.get("frontImage") or body.get("card_front") or body.get("cardFront")
-            b_b64 = body.get("back_image") or body.get("backImage") or body.get("card_back") or body.get("cardBack")
-            s_b64 = body.get("selfie_image") or body.get("selfieImage") or body.get("selfie")
-            v_b64 = body.get("video_file") or body.get("videoFile") or body.get("video")
-            if f_b64:
-                front_bytes = _decode_b64_image(f_b64)
-            if b_b64:
-                back_bytes = _decode_b64_image(b_b64)
-            if s_b64:
-                selfie_bytes = _decode_b64_image(s_b64)
-            if v_b64:
-                video_bytes = _decode_b64_image(v_b64)
+            if isinstance(body, dict):
+                f_val = body.get("front_image") or body.get("frontImage") or body.get("card_front") or body.get("cardFront") or body.get("front") or body.get("image")
+                b_val = body.get("back_image") or body.get("backImage") or body.get("card_back") or body.get("cardBack") or body.get("back")
+                s_val = body.get("selfie_image") or body.get("selfieImage") or body.get("selfie") or body.get("face_image") or body.get("face")
+                v_val = body.get("video_file") or body.get("videoFile") or body.get("video")
+                front_bytes = await _extract_bytes(f_val)
+                back_bytes = await _extract_bytes(b_val)
+                selfie_bytes = await _extract_bytes(s_val)
+                video_bytes = await _extract_bytes(v_val)
         except Exception as json_err:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -69,44 +80,30 @@ async def process_full_ekyc(
 
     # 2. Multipart form upload
     if front_bytes is None:
-        f_file = front_image or frontImage
-        b_file = back_image or backImage
-        s_file = selfie_image or selfieImage
-        v_file = video_file or videoFile
-
         try:
             form = await request.form()
-            if not f_file:
-                for key in ["front_image", "frontImage", "card_front", "cardFront", "front"]:
-                    if key in form and hasattr(form[key], "read"):
-                        f_file = form[key]
+            for key in ["front_image", "frontImage", "card_front", "cardFront", "front", "image_front", "file_front", "image", "file"]:
+                if key in form:
+                    front_bytes = await _extract_bytes(form[key])
+                    if front_bytes:
                         break
-            if not b_file:
-                for key in ["back_image", "backImage", "card_back", "cardBack", "back"]:
-                    if key in form and hasattr(form[key], "read"):
-                        b_file = form[key]
+            for key in ["back_image", "backImage", "card_back", "cardBack", "back", "image_back", "file_back"]:
+                if key in form:
+                    back_bytes = await _extract_bytes(form[key])
+                    if back_bytes:
                         break
-            if not s_file:
-                for key in ["selfie_image", "selfieImage", "selfie", "face"]:
-                    if key in form and hasattr(form[key], "read"):
-                        s_file = form[key]
+            for key in ["selfie_image", "selfieImage", "selfie", "face_image", "faceImage", "face"]:
+                if key in form:
+                    selfie_bytes = await _extract_bytes(form[key])
+                    if selfie_bytes:
                         break
-            if not v_file:
-                for key in ["video_file", "videoFile", "video"]:
-                    if key in form and hasattr(form[key], "read"):
-                        v_file = form[key]
+            for key in ["video_file", "videoFile", "video"]:
+                if key in form:
+                    video_bytes = await _extract_bytes(form[key])
+                    if video_bytes:
                         break
         except Exception:
             pass
-
-        if f_file and hasattr(f_file, "read"):
-            front_bytes = await f_file.read()
-        if b_file and hasattr(b_file, "read"):
-            back_bytes = await b_file.read()
-        if s_file and hasattr(s_file, "read"):
-            selfie_bytes = await s_file.read()
-        if v_file and hasattr(v_file, "read"):
-            video_bytes = await v_file.read()
 
     if not front_bytes:
         raise HTTPException(
