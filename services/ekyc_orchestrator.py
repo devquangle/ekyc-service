@@ -34,14 +34,14 @@ class EkycOrchestrator:
         self.face_engine = face_engine
         self.liveness_engine = liveness_engine
 
-    def process_card(self, front_bytes: bytes, back_bytes: bytes) -> CardProcessResponse:
+    def process_card(self, front_bytes: bytes, back_bytes: Optional[bytes] = None) -> CardProcessResponse:
         """
         Executes Card Extraction & Validation Flow.
         """
-        front_img = decode_image_bytes(front_bytes)
-        back_img = decode_image_bytes(back_bytes)
+        front_img = decode_image_bytes(front_bytes) if front_bytes else None
+        back_img = decode_image_bytes(back_bytes) if (back_bytes and len(back_bytes) > 0) else None
 
-        if front_img is None or back_img is None:
+        if front_img is None:
             return CardProcessResponse(
                 cardVerified=False,
                 cardType="UNKNOWN",
