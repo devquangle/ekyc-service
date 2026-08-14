@@ -3,19 +3,21 @@ import unicodedata
 from datetime import datetime
 from typing import Optional, Tuple
 from utils.text_utils import remove_vietnamese_accents
+from utils.text_normalizer import UnicodeNormalizer, MojibakeFixer, VietnameseTextCorrector
 
 
 def normalize_unicode(text: Optional[str]) -> Optional[str]:
     """
-    Normalizes unicode text to NFC and strips leading/trailing whitespaces.
+    Normalizes unicode text to NFC, fixes mojibake and strips leading/trailing whitespaces.
     Returns None if input is empty, None, or whitespace-only.
     """
     if not text:
         return None
-    clean = str(text).strip()
-    if not clean:
+    clean = UnicodeNormalizer.normalize(str(text))
+    if not clean or not clean.strip():
         return None
-    return unicodedata.normalize("NFC", clean)
+    fixed = MojibakeFixer.fix(clean)
+    return fixed.strip() if fixed else None
 
 
 def normalize_gender(raw_gender: Optional[str]) -> Optional[str]:
@@ -27,7 +29,10 @@ def normalize_gender(raw_gender: Optional[str]) -> Optional[str]:
     """
     if not raw_gender:
         return None
-    clean = remove_vietnamese_accents(str(raw_gender)).upper().strip()
+    norm = normalize_unicode(raw_gender)
+    if not norm:
+        return None
+    clean = remove_vietnamese_accents(norm).upper().strip()
 
     if clean in ["NAM", "M", "MALE"]:
         return "Nam"
@@ -59,7 +64,7 @@ def parse_date(date_str: Optional[str]) -> Optional[str]:
 
     # 2. Match DD/MM/YYYY or D/M/YYYY or DD-MM-YYYY or DD.MM.YYYY
     dmy_match = re.search(
-        r'\b([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b',
+        r'(?:\b|\D)([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b',
         clean
     )
     if dmy_match:
@@ -123,22 +128,18 @@ def normalize_identity_number(raw_identity_number: Optional[str]) -> Optional[st
 def normalize_full_name(raw_name: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """
     Normalizes full name returning a tuple of (canonical_normalized_name, raw_clean_text).
+    Applies Unicode NFC normalization, Mojibake repair, and formatting.
     Example: 'TRẦN  THỊ   ÚT' -> ('TRAN THI UT', 'TRẦN THỊ ÚT')
     """
     if not raw_name:
         return None, None
 
-    text = str(raw_name).strip()
-    if not text:
+    raw_str, ocr_val, _, _ = VietnameseTextCorrector.normalize_pipeline(raw_name)
+    if not ocr_val:
         return None, None
 
-    text_nfc = unicodedata.normalize("NFC", text)
-    raw_clean = re.sub(r'\s+', ' ', text_nfc).strip()
-    if not raw_clean:
-        return None, None
-
-    canonical = remove_vietnamese_accents(raw_clean).upper()
-    return canonical, raw_clean
+    canonical = remove_vietnamese_accents(ocr_val).upper()
+    return canonical, ocr_val
 
 
 def normalize_address(raw_address: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
@@ -150,25 +151,11 @@ def normalize_address(raw_address: Optional[str]) -> Tuple[Optional[str], Option
     if not raw_address:
         return None, None
 
-    text = str(raw_address).strip()
-    if not text:
+    raw_str, ocr_val, _, _ = VietnameseTextCorrector.normalize_pipeline(raw_address)
+    if not ocr_val:
         return None, None
 
-    # Separate camelCase or concatenated words if present
-    clean_raw = re.sub(
-        r'([a-zàáảãạăắằẳẵặâấầnẩẫậeéèẻẽẹêếềểễệiíìỉĩịoóòỏõọôốồổỗộơớờởỡợuúùủũụưứừửữựyýỳỷỹỵ])([A-ZÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬEÉÈẺẼẸÊẾỀỂỄỆIÍÌỈĨỊOÓÒỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢUÚÙỦŨỤƯỨỪỬỮỰYÝỲỶỸỴ])',
-        r'\1 \2',
-        text
-    )
-    clean_raw = re.sub(r'[\n\r]+', ' ', clean_raw)
-    clean_raw = re.sub(r'\s+', ' ', clean_raw).strip()
-
-    if not clean_raw:
-        return None, None
-
-    normalized_val = unicodedata.normalize("NFC", clean_raw)
-
-    return normalized_val, normalized_val
+    return ocr_val, ocr_val
 
 
 def normalize_address_for_compare(raw_address: Optional[str]) -> Optional[str]:
@@ -195,11 +182,11 @@ def normalize_text_for_compare(value: Optional[str]) -> Optional[str]:
     """
     if not value:
         return None
-    text = str(value).strip()
-    if not text:
+    norm = normalize_unicode(value)
+    if not norm:
         return None
 
-    unaccented = remove_vietnamese_accents(text)
+    unaccented = remove_vietnamese_accents(norm)
     clean = re.sub(r'[^A-Z0-9\s]', ' ', unaccented)
     clean = re.sub(r'\s+', ' ', clean).strip()
     return clean if clean else None

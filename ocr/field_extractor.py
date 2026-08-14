@@ -3,7 +3,7 @@ from typing import List, Dict, Optional, Tuple, Any
 from pydantic import BaseModel
 from ocr.detector import OCRText
 from ocr.layout_parser import LayoutLine, LayoutParser
-from ocr.label_matcher import LabelMatcher, FIELD_LABELS
+from ocr.label_matcher import LabelMatcher, FIELD_LABELS, ADDRESS_STOP_KEYWORDS
 from ocr.normalizer import (
     normalize_unicode,
     normalize_gender,
@@ -23,7 +23,9 @@ class ExtractedField(BaseModel):
     keyword: Optional[str] = None
     language: Optional[str] = None
     confidence: float = 0.0
-    bbox: Optional[List[List[float]]] = None
+    bbox: Optional[List[List[float]]] = None  # Polygon representation
+    label_box: Optional[List[float]] = None    # [x_min, y_min, x_max, y_max]
+    value_box: Optional[List[float]] = None    # [x_min, y_min, x_max, y_max]
 
 
 class FieldExtractor:
@@ -31,6 +33,7 @@ class FieldExtractor:
     Data-Driven Generic Field Extractor.
     Uses spatial bounding box layout parsing, LabelMatcher fuzzy label recognition,
     and line boundary isolation without hardcoding personal identity data or OCR typos.
+    Calculates distinct label_box and value_box for all fields.
     """
 
     def __init__(self):
@@ -84,7 +87,7 @@ class FieldExtractor:
             extracted["placeOfResidence"] = res_field
 
         # 8. Date of Issue
-        doi_field = self._extract_date_field(layout_lines, keyword_matches, "dateOfIssue")
+        doi_field = self._extract_date_of_issue(layout_lines, keyword_matches)
         if doi_field:
             extracted["dateOfIssue"] = doi_field
 
@@ -94,6 +97,26 @@ class FieldExtractor:
             extracted["dateOfExpiry"] = doe_field
 
         return extracted
+
+    def _compute_bbox_4(self, tokens: List[OCRText]) -> Optional[List[float]]:
+        if not tokens:
+            return None
+        xs = [pt[0] for t in tokens if t and t.bbox for pt in t.bbox]
+        ys = [pt[1] for t in tokens if t and t.bbox for pt in t.bbox]
+        if not xs or not ys:
+            return None
+        return [
+            round(float(min(xs)), 1),
+            round(float(min(ys)), 1),
+            round(float(max(xs)), 1),
+            round(float(max(ys)), 1)
+        ]
+
+    def _get_label_tokens(self, line: LayoutLine, value_tokens: List[OCRText]) -> List[OCRText]:
+        if not line or not line.tokens:
+            return []
+        val_set = set(id(t) for t in value_tokens)
+        return [t for t in line.tokens if id(t) not in val_set]
 
     def _get_value_tokens(self, line: LayoutLine, field_name: str) -> List[OCRText]:
         """
@@ -162,6 +185,17 @@ class FieldExtractor:
                 if field_name not in matches:
                     matches[field_name] = (line_idx, line, matched_label)
 
+            # Also check if another field label is present on this same line (e.g. gender & nationality on CCCD_OLD)
+            clean_text = remove_vietnamese_accents(line.text).lower()
+            for field_name, labels in FIELD_LABELS.items():
+                if field_name in matches:
+                    continue
+                for lbl in labels:
+                    lbl_clean = remove_vietnamese_accents(lbl).lower()
+                    if len(lbl_clean) >= 3 and lbl_clean in clean_text:
+                        matches[field_name] = (line_idx, line, lbl)
+                        break
+
         return matches
 
     def _extract_identity_number(
@@ -173,7 +207,6 @@ class FieldExtractor:
 
         candidates = []
         for line_idx, line in enumerate(layout_lines):
-            # Check full line
             norm_id = normalize_identity_number(line.text)
             if norm_id:
                 score = 0.5 + line.confidence * 0.3
@@ -183,7 +216,6 @@ class FieldExtractor:
                     score += 0.1
                 candidates.append((score, norm_id, line.text, line))
             else:
-                # Sub-search in line text for 9 or 12 digit candidate
                 match = re.search(r'\b[0O][0-9OIL]{11}\b|\b[0-9OIL]{12}\b|\b[0-9OIL]{9}\b', line.text, re.IGNORECASE)
                 if match:
                     raw_id = match.group(0)
@@ -202,8 +234,20 @@ class FieldExtractor:
         candidates.sort(key=lambda c: c[0], reverse=True)
         best_score, best_id, best_raw, best_line = candidates[0]
 
-        kw_text = kw_info[1].text if kw_info else "Số / No."
+        kw_text = kw_info[2] if kw_info else "Số / No.:"
         val_tokens = self._get_value_tokens(best_line, "identityNumber")
+
+        if kw_info:
+            kw_idx, kw_line, matched_label = kw_info
+            if best_line == kw_line:
+                lbl_tokens = self._get_label_tokens(best_line, val_tokens)
+            else:
+                lbl_tokens = kw_line.tokens
+        else:
+            lbl_tokens = []
+
+        label_box = self._compute_bbox_4(lbl_tokens)
+        value_box = self._compute_bbox_4(val_tokens)
         merged_bbox = self._compute_merged_bbox(val_tokens)
 
         return ExtractedField(
@@ -213,7 +257,9 @@ class FieldExtractor:
             keyword=kw_text,
             language="VI/EN",
             confidence=round(min(0.99, best_score), 2),
-            bbox=merged_bbox
+            bbox=merged_bbox,
+            label_box=label_box,
+            value_box=value_box
         )
 
     def _extract_full_name(
@@ -234,11 +280,15 @@ class FieldExtractor:
         if inline_val and len(inline_val) > 2:
             raw_name = inline_val
             field_tokens = self._get_value_tokens(kw_line, "fullName")
+            lbl_tokens = self._get_label_tokens(kw_line, field_tokens)
         elif kw_idx + 1 < len(layout_lines):
             next_line = layout_lines[kw_idx + 1]
             if not self._is_keyword_line(next_line):
                 raw_name = next_line.text
                 field_tokens = self._get_value_tokens(next_line, "fullName")
+            lbl_tokens = kw_line.tokens
+        else:
+            lbl_tokens = kw_line.tokens
 
         if not raw_name:
             return None
@@ -247,16 +297,21 @@ class FieldExtractor:
 
         logger.info(f"[FIELD_EXTRACTOR] fullName keyword='{kw_str}' raw='{raw_clean}' canonical='{canonical_val}'")
 
+        label_box = self._compute_bbox_4(lbl_tokens)
+        value_box = self._compute_bbox_4(field_tokens)
         merged_bbox = self._compute_merged_bbox(field_tokens)
+        kw_text = kw_str if kw_str else "Họ và tên / Full name:"
 
         return ExtractedField(
             fieldName="fullName",
             value=canonical_val,
             rawText=raw_clean,
-            keyword=kw_line.text,
+            keyword=kw_text,
             language="VI/EN",
             confidence=round(kw_line.confidence, 2),
-            bbox=merged_bbox
+            bbox=merged_bbox,
+            label_box=label_box,
+            value_box=value_box
         )
 
     def _extract_gender(
@@ -270,23 +325,40 @@ class FieldExtractor:
 
         if kw_info:
             kw_idx, kw_line, kw_str = kw_info
-            inline_val = self._strip_header_label(kw_line.text, "gender")
+            clean_kw_line = remove_vietnamese_accents(kw_line.text).lower()
 
-            if inline_val:
-                raw_gender_str = inline_val
+            if "quoc" in clean_kw_line or "nat" in clean_kw_line:
+                # Line shared with Nationality: isolate gender part before nationality
+                nat_pattern = r'(?:quoc\s*tich|nationality).*$'
+                gender_part = re.sub(nat_pattern, '', clean_kw_line, flags=re.IGNORECASE).strip()
+                inline_val = self._strip_header_label(gender_part, "gender")
+                if inline_val:
+                    m = re.search(r'\b(nam|male|nu|female)\b', inline_val)
+                    raw_gender_str = m.group(0) if m else inline_val
+                elif re.search(r'\b(nam|male|nu|female)\b', gender_part):
+                    m = re.search(r'\b(nam|male|nu|female)\b', gender_part)
+                    raw_gender_str = m.group(0) if m else "Nam"
                 target_line = kw_line
-            elif re.search(r'\b(nam|male|nu|nữ|female)\b', kw_line.text, re.IGNORECASE):
-                raw_gender_str = kw_line.text
-                target_line = kw_line
-            elif kw_idx + 1 < len(layout_lines):
-                raw_gender_str = layout_lines[kw_idx + 1].text
-                target_line = layout_lines[kw_idx + 1]
+            else:
+                inline_val = self._strip_header_label(kw_line.text, "gender")
+                if inline_val:
+                    m = re.search(r'\b(nam|male|nu|nữ|female)\b', inline_val, re.IGNORECASE)
+                    raw_gender_str = m.group(0) if m else inline_val
+                    target_line = kw_line
+                elif re.search(r'\b(nam|male|nu|nữ|female)\b', kw_line.text, re.IGNORECASE):
+                    m = re.search(r'\b(nam|male|nu|nữ|female)\b', kw_line.text, re.IGNORECASE)
+                    raw_gender_str = m.group(0) if m else kw_line.text
+                    target_line = kw_line
+                elif kw_idx + 1 < len(layout_lines):
+                    raw_gender_str = layout_lines[kw_idx + 1].text
+                    target_line = layout_lines[kw_idx + 1]
 
         if not raw_gender_str:
             for line in layout_lines:
                 clean_text = remove_vietnamese_accents(line.text).lower()
-                if any(w in clean_text.split() for w in ["nam", "male", "nu", "female"]):
-                    raw_gender_str = line.text
+                m = re.search(r'\b(nam|male|nu|female)\b', clean_text)
+                if m:
+                    raw_gender_str = m.group(0)
                     target_line = line
                     break
 
@@ -295,21 +367,56 @@ class FieldExtractor:
 
         norm_gender = normalize_gender(raw_gender_str)
         if not norm_gender:
-            return None
+            # Fallback regex check
+            if re.search(r'\b(nam|male)\b', remove_vietnamese_accents(raw_gender_str).lower()):
+                norm_gender = "Nam"
+            elif re.search(r'\b(nu|female)\b', remove_vietnamese_accents(raw_gender_str).lower()):
+                norm_gender = "Nữ"
+            else:
+                return None
 
         logger.info(f"[FIELD_EXTRACTOR] gender raw='{raw_gender_str}' normalized='{norm_gender}'")
 
-        val_tokens = self._get_value_tokens(target_line, "gender") if target_line else []
+        kw_text = kw_info[2] if kw_info else "Giới tính / Sex:"
+        lbl_tokens = []
+        val_tokens = []
+
+        if target_line:
+            clean_tgt = remove_vietnamese_accents(target_line.text).lower()
+            if "quoc" in clean_tgt or "nat" in clean_tgt:
+                # Shared line with Nationality (CCCD_OLD layout)
+                nat_token_idx = len(target_line.tokens)
+                for idx, t in enumerate(target_line.tokens):
+                    t_c = remove_vietnamese_accents(t.text).lower()
+                    if any(w in t_c for w in ["quoc", "tich", "nat"]):
+                        nat_token_idx = idx
+                        break
+                gender_tokens = target_line.tokens[:nat_token_idx]
+                val_tokens = [t for t in gender_tokens if any(w in remove_vietnamese_accents(t.text).lower().split() for w in ["nam", "nu", "male", "female"])]
+                lbl_tokens = [t for t in gender_tokens if t not in val_tokens]
+            elif kw_info and target_line == kw_info[1]:
+                val_tokens = self._get_value_tokens(target_line, "gender")
+                lbl_tokens = self._get_label_tokens(target_line, val_tokens)
+            else:
+                lbl_tokens = kw_info[1].tokens if kw_info else []
+                val_tokens = target_line.tokens
+        elif kw_info:
+            lbl_tokens = kw_info[1].tokens
+
+        label_box = self._compute_bbox_4(lbl_tokens)
+        value_box = self._compute_bbox_4(val_tokens)
         merged_bbox = self._compute_merged_bbox(val_tokens)
 
         return ExtractedField(
             fieldName="gender",
             value=norm_gender,
             rawText=raw_gender_str,
-            keyword=kw_info[1].text if kw_info else "Giới tính / Sex",
+            keyword=kw_text,
             language="VI/EN",
             confidence=round(target_line.confidence, 2) if target_line else 0.95,
-            bbox=merged_bbox
+            bbox=merged_bbox,
+            label_box=label_box,
+            value_box=value_box
         )
 
     def _extract_nationality(
@@ -324,21 +431,58 @@ class FieldExtractor:
 
         if kw_info:
             kw_idx, kw_line, kw_str = kw_info
-            field_tokens = self._get_value_tokens(kw_line, "nationality")
-            inline_val = self._strip_header_label(kw_line.text, "nationality")
-            if inline_val and len(inline_val) >= 3:
-                raw_nat = inline_val
+            clean_kw = remove_vietnamese_accents(kw_line.text).lower()
+            if "gioi" in clean_kw or "sex" in clean_kw:
+                # Shared line with Gender (CCCD_OLD layout)
+                nat_pattern = r'^.*?(?:quoc\s*tich|nationality)[:\s\/._]*'
+                nat_part = re.sub(nat_pattern, '', kw_line.text, flags=re.IGNORECASE).strip()
+                if nat_part:
+                    raw_nat = nat_part
+                field_tokens = self._get_value_tokens(kw_line, "nationality")
+            else:
+                field_tokens = self._get_value_tokens(kw_line, "nationality")
+                inline_val = self._strip_header_label(kw_line.text, "nationality")
+                if inline_val and len(inline_val) >= 3:
+                    raw_nat = inline_val
 
-        merged_bbox = self._compute_merged_bbox(field_tokens)
+        kw_text = kw_info[2] if kw_info else "Quốc tịch / Nationality:"
+        lbl_tokens = []
+        val_tokens = []
+
+        if kw_info:
+            kw_idx, kw_line, kw_str = kw_info
+            clean_kw = remove_vietnamese_accents(kw_line.text).lower()
+            if "gioi" in clean_kw or "sex" in clean_kw:
+                # Shared line with Gender (CCCD_OLD layout)
+                nat_token_idx = 0
+                for idx, t in enumerate(kw_line.tokens):
+                    t_c = remove_vietnamese_accents(t.text).lower()
+                    if any(w in t_c for w in ["quoc", "tich", "nat"]):
+                        nat_token_idx = idx
+                        break
+                nat_tokens = kw_line.tokens[nat_token_idx:]
+                val_tokens = [t for t in nat_tokens if any(w in remove_vietnamese_accents(t.text).lower().split() for w in ["viet", "nam"])]
+                lbl_tokens = [t for t in nat_tokens if t not in val_tokens]
+            else:
+                val_tokens = self._get_value_tokens(kw_line, "nationality")
+                lbl_tokens = self._get_label_tokens(kw_line, val_tokens)
+        else:
+            val_tokens = field_tokens
+
+        label_box = self._compute_bbox_4(lbl_tokens)
+        value_box = self._compute_bbox_4(val_tokens)
+        merged_bbox = self._compute_merged_bbox(val_tokens)
 
         return ExtractedField(
             fieldName="nationality",
             value="Việt Nam",
             rawText=raw_nat,
-            keyword=kw_info[1].text if kw_info else "Quốc tịch / Nationality",
+            keyword=kw_text,
             language="VI/EN",
             confidence=0.98,
-            bbox=merged_bbox
+            bbox=merged_bbox,
+            label_box=label_box,
+            value_box=value_box
         )
 
     def _extract_address_field(
@@ -359,45 +503,62 @@ class FieldExtractor:
         inline_val = self._strip_header_label(kw_line.text, field_name)
         if inline_val and len(inline_val) > 1:
             gathered_text_parts.append(inline_val)
-            gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
-
-        # Field-specific stop_keywords support both CCCD_OLD (front-side) and CCCD_NEW (back-side) layouts
-        if field_name == "placeOfResidence":
-            # placeOfResidence stops when hitting placeOfOrigin/birth-registration labels or expiry/authority
-            stop_keywords = [
-                "noi dang ky khai sinh", "place of birth registration",
-                "que quan", "place of origin",
-                "co gia tri den", "date of expiry", "date expiry",
-                "bo cong an", "ministry",
-                "ngay thang nam cap", "date month year"
-            ]
-        elif field_name == "placeOfOrigin":
-            # placeOfOrigin stops when hitting residence labels or issue-date/authority lines
-            stop_keywords = [
-                "noi thuong tru", "place of residence", "noi cu tru",
-                "co gia tri den", "date of expiry", "date expiry",
-                "ngay thang nam cap", "date month year",
-                "bo cong an", "ministry"
-            ]
+            val1_toks = self._get_value_tokens(kw_line, field_name)
+            gathered_tokens.extend(val1_toks)
+            lbl_tokens = self._get_label_tokens(kw_line, val1_toks)
         else:
-            # Generic fallback for any future address-type field
-            stop_keywords = [
-                "noi thuong tru", "place of residence", "noi cu tru",
-                "co gia tri den", "date of expiry", "date expiry",
-                "bo cong an", "ministry"
-            ]
+            lbl_tokens = kw_line.tokens
+
+        # Calculate estimated card width for spatial coordinate checks
+        card_width = max([line.max_x for line in layout_lines] + [1000.0])
+
+        stop_keywords = ADDRESS_STOP_KEYWORDS.get(
+            field_name,
+            ADDRESS_STOP_KEYWORDS["placeOfOrigin"] + ADDRESS_STOP_KEYWORDS["placeOfResidence"]
+        )
+
+        stop_patterns = r'(co gia tri den|date of expiry|date expiry|bo cong an|ministry|cuc truong|ngon tro)'
 
         for j in range(kw_idx + 1, len(layout_lines)):
             line = layout_lines[j]
-            if self._is_keyword_line(line, exclude_field=field_name):
-                break
-
             clean_j = remove_vietnamese_accents(line.text).lower()
-            if any(kw in clean_j for kw in stop_keywords):
-                break
 
-            gathered_text_parts.append(line.text)
-            gathered_tokens.extend(line.tokens)
+            # Check if line is an unrelated keyword line (e.g. fullName, identityNumber, dateOfBirth, gender, nationality)
+            match_res = self.label_matcher.match_line_label(line.text)
+            if match_res:
+                matched_field, _, _ = match_res
+                if matched_field != field_name and matched_field not in ("dateOfExpiry",):
+                    break
+
+            # Filter tokens: on CCCD_OLD front, 2nd line of residence address often shares a row with expiry info
+            # Left side (< 0.38 * card_width): "Có giá trị đến / Date of expiry: 04/10/2029"
+            # Right side (>= 0.38 * card_width): "Tân Bình, Châu Thành, Đồng Tháp"
+            valid_addr_tokens = []
+            for token in line.tokens:
+                token_center_x = sum(pt[0] for pt in token.bbox) / max(len(token.bbox), 1)
+                tok_clean = remove_vietnamese_accents(token.text).lower()
+
+                is_left = token_center_x < 0.38 * card_width
+                is_expiry_stop = (
+                    bool(re.search(r'\b(co|gia|tri|den|date|of|expiry|exp|ngay|thang|nam|het|han|bo|cong|an|cuc|truong)\b', tok_clean))
+                    or bool(re.search(r'\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4}', token.text))
+                    or bool(parse_date(token.text))
+                )
+
+                if is_left and is_expiry_stop:
+                    continue  # Ignore expiry/footer tokens on the left
+
+                if re.search(r'\b(bo cong an|ministry of public security|cuc truong cuc canh sat)\b', tok_clean):
+                    continue
+
+                valid_addr_tokens.append(token)
+
+            if valid_addr_tokens:
+                gathered_tokens.extend(valid_addr_tokens)
+                gathered_text_parts.append(" ".join(t.text for t in valid_addr_tokens))
+            else:
+                if any(kw in clean_j for kw in stop_keywords) or re.search(stop_patterns, clean_j):
+                    break
 
         if not gathered_text_parts:
             return None
@@ -410,16 +571,21 @@ class FieldExtractor:
 
         logger.info(f"[FIELD_EXTRACTOR] {field_name} raw='{clean_raw}' normalized='{norm_val}'")
 
+        label_box = self._compute_bbox_4(lbl_tokens)
+        value_box = self._compute_bbox_4(gathered_tokens)
         merged_bbox = self._compute_merged_bbox(gathered_tokens)
+        kw_text = kw_str if kw_str else ("Nơi thường trú / Place of residence:" if field_name == "placeOfResidence" else "Quê quán / Place of origin:")
 
         return ExtractedField(
             fieldName=field_name,
             value=norm_val,
             rawText=clean_raw,
-            keyword=kw_line.text,
+            keyword=kw_text,
             language="VI/EN",
             confidence=round(kw_line.confidence, 2),
-            bbox=merged_bbox
+            bbox=merged_bbox,
+            label_box=label_box,
+            value_box=value_box
         )
 
     def _extract_date_field(
@@ -437,13 +603,14 @@ class FieldExtractor:
         gathered_tokens: List[OCRText] = []
         search_text = kw_line.text
         parsed = None
+        target_line = kw_line
 
-        DATE_PATTERN = r'\b([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b'
+        DATE_PATTERN = r'(?:\b|\D)([1-9]|0[1-9]|[12]\d|3[01])[\/.\-]([1-9]|0[1-9]|1[0-2])[\/.\-]((?:19|20)\d{2})\b'
 
         # 1. Inline pattern scan directly on kw_line.text
         inline_match = re.search(DATE_PATTERN, kw_line.text)
         if inline_match:
-            raw_inline = inline_match.group(0)
+            raw_inline = inline_match.group(0).strip()
             parsed = parse_date(raw_inline)
             if parsed:
                 gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
@@ -454,55 +621,182 @@ class FieldExtractor:
             if parsed:
                 gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
 
-        # 3. Scan up to 3 next lines (dateOfIssue on back of CCCD may be separated from the label)
+        # 3. Lookahead up to 3 next lines
         if not parsed:
-            max_lookahead = 3 if field_name == "dateOfIssue" else 1
+            max_lookahead = 3 if field_name in ("dateOfIssue", "dateOfExpiry") else 1
             for offset in range(1, max_lookahead + 1):
                 next_idx = kw_idx + offset
                 if next_idx >= len(layout_lines):
                     break
                 next_line = layout_lines[next_idx]
-                # Stop if we hit another field label (except same field)
                 if self._is_keyword_line(next_line, exclude_field=field_name):
                     break
                 combined = kw_line.text + " " + next_line.text
                 next_match = re.search(DATE_PATTERN, next_line.text)
                 if next_match:
-                    raw_next = next_match.group(0)
+                    raw_next = next_match.group(0).strip()
                     parsed = parse_date(raw_next)
                     if parsed:
                         search_text = combined
-                        gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
                         gathered_tokens.extend(next_line.tokens)
+                        target_line = next_line
                         break
-                # Also try parse_date on combined
                 parsed_combined = parse_date(combined)
                 if parsed_combined:
                     parsed = parsed_combined
                     search_text = combined
-                    gathered_tokens.extend(self._get_value_tokens(kw_line, field_name))
                     gathered_tokens.extend(next_line.tokens)
+                    target_line = next_line
                     break
 
         if not parsed:
             return None
 
         match = re.search(DATE_PATTERN, search_text)
-        raw_date_str = match.group(0) if match else parsed
+        raw_date_str = match.group(0).strip() if match else parsed
 
         logger.info(f"[FIELD_EXTRACTOR] {field_name} raw='{raw_date_str}' iso='{parsed}'")
 
+        if target_line == kw_line:
+            # Inline on same line (or on left side of line for expiry)
+            lbl_tokens = self._get_label_tokens(kw_line, gathered_tokens)
+        else:
+            lbl_tokens = kw_line.tokens
+
+        label_box = self._compute_bbox_4(lbl_tokens)
+        value_box = self._compute_bbox_4(gathered_tokens)
         merged_bbox = self._compute_merged_bbox(gathered_tokens)
+        kw_text = kw_str if kw_str else ("Ngày sinh / Date of birth:" if field_name == "dateOfBirth" else "Có giá trị đến / Date of expiry:")
 
         return ExtractedField(
             fieldName=field_name,
             value=parsed,
             rawText=raw_date_str,
-            keyword=kw_line.text,
+            keyword=kw_text,
             language="VI/EN",
             confidence=round(kw_line.confidence, 2),
-            bbox=merged_bbox
+            bbox=merged_bbox,
+            label_box=label_box,
+            value_box=value_box
         )
+
+    def _extract_date_of_issue(
+        self,
+        layout_lines: List[LayoutLine],
+        keyword_matches: Optional[Dict[str, Tuple[int, LayoutLine, str]]] = None
+    ) -> Optional[ExtractedField]:
+        """
+        Extracts Date of Issue from card lines (especially back side of CCCD).
+        Scans for keywords: 'ngày, tháng, năm', 'date, month, year', 'ngày, tháng, năm cấp', 'date of issue', 'ngày cấp'.
+        Finds regex DD/MM/YYYY and converts to ISO YYYY-MM-DD.
+        """
+        DATE_PATTERN = r'(?:\b|\D)(\d{1,2}[\/\.\-]\d{1,2}[\/\-](?:19|20)\d{2})\b'
+
+        # 1. Check if keyword_matches already has dateOfIssue
+        if keyword_matches and "dateOfIssue" in keyword_matches:
+            kw_idx, kw_line, matched_label = keyword_matches["dateOfIssue"]
+            m0 = re.search(DATE_PATTERN, kw_line.text)
+            if m0:
+                raw_dmy = m0.group(1) if m0.lastindex else m0.group(0)
+                parsed = parse_date(raw_dmy)
+                if parsed:
+                    val_tokens = self._get_value_tokens(kw_line, "dateOfIssue")
+                    lbl_tokens = self._get_label_tokens(kw_line, val_tokens)
+                    label_box = self._compute_bbox_4(lbl_tokens)
+                    value_box = self._compute_bbox_4(val_tokens)
+                    return ExtractedField(
+                        fieldName="dateOfIssue",
+                        value=parsed,
+                        rawText=raw_dmy,
+                        keyword=matched_label,
+                        language="VI/EN",
+                        confidence=round(kw_line.confidence, 2),
+                        bbox=self._compute_merged_bbox(val_tokens),
+                        label_box=label_box,
+                        value_box=value_box
+                    )
+            # Scan lookahead
+            for offset in range(1, 3):
+                if kw_idx + offset < len(layout_lines):
+                    next_line = layout_lines[kw_idx + offset]
+                    m_next = re.search(DATE_PATTERN, next_line.text)
+                    if m_next:
+                        raw_dmy = m_next.group(0)
+                        parsed = parse_date(raw_dmy)
+                        if parsed:
+                            lbl_tokens = kw_line.tokens
+                            val_tokens = next_line.tokens
+                            label_box = self._compute_bbox_4(lbl_tokens)
+                            value_box = self._compute_bbox_4(val_tokens)
+                            return ExtractedField(
+                                fieldName="dateOfIssue",
+                                value=parsed,
+                                rawText=raw_dmy,
+                                keyword=matched_label,
+                                language="VI/EN",
+                                confidence=round(next_line.confidence, 2),
+                                bbox=self._compute_merged_bbox(val_tokens),
+                                label_box=label_box,
+                                value_box=value_box
+                            )
+
+        # 2. General scan across all layout_lines for issue date keywords
+        issue_keywords = [
+            "ngay, thang, nam cap", "ngay thang nam cap", "date of issue",
+            "ngay, thang, nam", "ngay thang nam", "date, month, year",
+            "ngay cap", "ngaycap", "cap ngay"
+        ]
+
+        for line_idx, line in enumerate(layout_lines):
+            clean_text = remove_vietnamese_accents(line.text).lower()
+            if "het han" in clean_text or "expiry" in clean_text or "co gia tri den" in clean_text:
+                continue
+
+            if any(k in clean_text for k in issue_keywords):
+                m = re.search(DATE_PATTERN, line.text)
+                if m:
+                    raw_dmy = m.group(0)
+                    parsed = parse_date(raw_dmy)
+                    if parsed:
+                        val_tokens = self._get_value_tokens(line, "dateOfIssue")
+                        lbl_tokens = self._get_label_tokens(line, val_tokens)
+                        label_box = self._compute_bbox_4(lbl_tokens)
+                        value_box = self._compute_bbox_4(val_tokens)
+                        return ExtractedField(
+                            fieldName="dateOfIssue",
+                            value=parsed,
+                            rawText=raw_dmy,
+                            keyword="Ngày, tháng, năm / Date, month, year:",
+                            language="VI/EN",
+                            confidence=round(line.confidence, 2),
+                            bbox=self._compute_merged_bbox(val_tokens),
+                            label_box=label_box,
+                            value_box=value_box
+                        )
+                if line_idx + 1 < len(layout_lines):
+                    next_line = layout_lines[line_idx + 1]
+                    m2 = re.search(DATE_PATTERN, next_line.text)
+                    if m2:
+                        raw_dmy = m2.group(0)
+                        parsed = parse_date(raw_dmy)
+                        if parsed:
+                            lbl_tokens = line.tokens
+                            val_tokens = next_line.tokens
+                            label_box = self._compute_bbox_4(lbl_tokens)
+                            value_box = self._compute_bbox_4(val_tokens)
+                            return ExtractedField(
+                                fieldName="dateOfIssue",
+                                value=parsed,
+                                rawText=raw_dmy,
+                                keyword="Ngày, tháng, năm / Date, month, year:",
+                                language="VI/EN",
+                                confidence=round(next_line.confidence, 2),
+                                bbox=self._compute_merged_bbox(val_tokens),
+                                label_box=label_box,
+                                value_box=value_box
+                            )
+
+        return None
 
     def _strip_header_label(self, line_text: str, field_name: str) -> Optional[str]:
         kw_list = FIELD_LABELS.get(field_name, [])

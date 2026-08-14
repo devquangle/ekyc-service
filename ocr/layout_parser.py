@@ -4,6 +4,24 @@ from ocr.detector import OCRText
 from utils.logger import logger
 
 
+def compute_tokens_bbox(tokens: List[OCRText]) -> Optional[List[float]]:
+    """
+    Computes [x_min, y_min, x_max, y_max] bounding box covering a list of OCRText tokens.
+    """
+    if not tokens:
+        return None
+    xs = [pt[0] for t in tokens if t and t.bbox for pt in t.bbox]
+    ys = [pt[1] for t in tokens if t and t.bbox for pt in t.bbox]
+    if not xs or not ys:
+        return None
+    return [
+        round(float(min(xs)), 1),
+        round(float(min(ys)), 1),
+        round(float(max(xs)), 1),
+        round(float(max(ys)), 1)
+    ]
+
+
 class LayoutLine(BaseModel):
     tokens: List[OCRText]
     text: str

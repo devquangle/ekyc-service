@@ -11,6 +11,11 @@ from utils.text_utils import (
     remove_vietnamese_accents,
     compare_names,
 )
+from utils.text_normalizer import (
+    UnicodeNormalizer,
+    MojibakeFixer,
+    VietnameseTextCorrector,
+)
 from utils.card_aligner import CardAligner
 
 __all__ = [
@@ -24,6 +29,9 @@ __all__ = [
     "normalize_date",
     "remove_vietnamese_accents",
     "compare_names",
+    "UnicodeNormalizer",
+    "MojibakeFixer",
+    "VietnameseTextCorrector",
     "CardAligner",
 ]
 

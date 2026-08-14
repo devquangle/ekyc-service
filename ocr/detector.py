@@ -5,16 +5,26 @@ from utils.logger import logger
 from utils.image_utils import resize_maintain_aspect
 
 
+from utils.text_normalizer import VietnameseTextCorrector, UnicodeNormalizer
+
+
 class OCRText(BaseModel):
     text: str
     confidence: float
     bbox: List[List[float]]  # [[x1, y1], [x2, y2], [x3, y3], [x4, y4]]
+    raw_text: Optional[str] = None
     center_x: float = 0.0
     center_y: float = 0.0
     width: float = 0.0
     height: float = 0.0
 
     def model_post_init(self, __context):
+        if not self.raw_text:
+            self.raw_text = self.text
+        # Ensure Unicode NFC normalization on self.text
+        if self.text:
+            _, ocr_val, _, _ = VietnameseTextCorrector.normalize_pipeline(self.text)
+            self.text = ocr_val or self.text.strip()
         if self.bbox and len(self.bbox) >= 4:
             xs = [pt[0] for pt in self.bbox]
             ys = [pt[1] for pt in self.bbox]
@@ -77,8 +87,12 @@ class TextDetector:
                 text, confidence = line[1]
                 bbox_float = [[float(pt[0]) * scale_x, float(pt[1]) * scale_y] for pt in bbox_raw]
 
+                raw_str = str(text)
+                _, ocr_val, _, _ = VietnameseTextCorrector.normalize_pipeline(raw_str)
+
                 token = OCRText(
-                    text=str(text).strip(),
+                    text=ocr_val or raw_str.strip(),
+                    raw_text=raw_str,
                     confidence=float(confidence),
                     bbox=bbox_float
                 )

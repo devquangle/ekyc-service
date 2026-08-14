@@ -56,7 +56,8 @@ class EkycOrchestrator:
             qr_data,
             mrz_data,
             quality_checks,
-            field_metadata
+            field_metadata,
+            visual_regions
         ) = self.card_processor.process(front_img, back_img)
 
         card_verified, cross_val_result, val_errors = self.card_validator.validate(
@@ -76,6 +77,8 @@ class EkycOrchestrator:
             extractedData=extracted_data,
             crossValidation=cross_val_result,
             qualityChecks=quality_checks,
+            visualRegions=visual_regions,
+            visual_regions=visual_regions,
             fieldMetadata=field_metadata,
             errors=unique_errors
         )

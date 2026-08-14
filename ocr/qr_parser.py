@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Tuple, List
 from ocr.normalizer import parse_date, normalize_full_name, normalize_gender, normalize_address
 from utils.logger import logger
 
@@ -9,33 +9,48 @@ class QrParser:
     """
     Decodes QR Code from Vietnamese CCCD front/back card images using multi-step cropping,
     grayscale enhancement, CLAHE/Thresholding, 180-degree rotation fallbacks, and multiple QR decoding engines.
+    Tracks and extracts accurate QR bounding box [x_min, y_min, x_max, y_max].
     """
 
     def __init__(self):
         self.cv_detector = cv2.QRCodeDetector()
+        self.last_qr_bbox: Optional[List[float]] = None
 
     def decode(self, image: np.ndarray) -> Optional[Dict[str, Any]]:
         if image is None or image.size == 0:
+            self.last_qr_bbox = None
             return None
 
-        raw_qr_text = self._try_detect_qr(image)
+        self.last_qr_bbox = None
+        raw_qr_text, qr_box = self._try_detect_qr_with_box(image)
+        self.last_qr_bbox = qr_box
 
         if not raw_qr_text:
             logger.info("[QR_PARSER] No QR code detected or unreadable.")
             return None
 
-        logger.info(f"[QR_PARSER] Raw QR text decoded: {raw_qr_text}")
+        logger.info(f"[QR_PARSER] Raw QR text decoded: {raw_qr_text} (bbox={qr_box})")
         return self.parse_qr_string(raw_qr_text)
 
-    def _decode_image_variants(self, img: np.ndarray) -> Optional[str]:
+    def decode_with_bbox(self, image: np.ndarray) -> Tuple[Optional[Dict[str, Any]], Optional[List[float]]]:
+        data = self.decode(image)
+        return data, self.last_qr_bbox
+
+    def _decode_variant_with_box(self, img: np.ndarray) -> Tuple[Optional[str], Optional[List[float]]]:
         if img is None or img.size == 0:
-            return None
+            return None, None
 
         # 1. OpenCV QRCodeDetector
         try:
             val, pts, _ = self.cv_detector.detectAndDecode(img)
             if val and len(val.strip()) > 0:
-                return val.strip()
+                box = None
+                if pts is not None and len(pts) > 0:
+                    pts_arr = pts[0] if len(pts.shape) == 3 else pts
+                    xs = [pt[0] for pt in pts_arr]
+                    ys = [pt[1] for pt in pts_arr]
+                    box = [round(float(min(xs)), 1), round(float(min(ys)), 1), round(float(max(xs)), 1), round(float(max(ys)), 1)]
+                return val.strip(), box
         except Exception:
             pass
 
@@ -46,7 +61,15 @@ class QrParser:
             for obj in decoded_objects:
                 text = obj.data.decode("utf-8", errors="ignore").strip()
                 if text:
-                    return text
+                    box = None
+                    if hasattr(obj, 'rect') and obj.rect:
+                        box = [
+                            round(float(obj.rect.left), 1),
+                            round(float(obj.rect.top), 1),
+                            round(float(obj.rect.left + obj.rect.width), 1),
+                            round(float(obj.rect.top + obj.rect.height), 1)
+                        ]
+                    return text, box
         except Exception:
             pass
 
@@ -56,48 +79,92 @@ class QrParser:
             results = zxingcpp.read_barcodes(img)
             for res in results:
                 if res.text and len(res.text.strip()) > 0:
-                    return res.text.strip()
+                    box = None
+                    if hasattr(res, 'position') and res.position:
+                        pts_z = [res.position.top_left, res.position.top_right, res.position.bottom_right, res.position.bottom_left]
+                        xs = [p.x for p in pts_z]
+                        ys = [p.y for p in pts_z]
+                        box = [round(float(min(xs)), 1), round(float(min(ys)), 1), round(float(max(xs)), 1), round(float(max(ys)), 1)]
+                    return res.text.strip(), box
         except Exception:
             pass
 
-        return None
+        return None, None
+
+    def _decode_image_variants(self, img: np.ndarray) -> Optional[str]:
+        text, _ = self._decode_variant_with_box(img)
+        return text
+
+    def _try_detect_qr_with_box(self, image: np.ndarray) -> Tuple[Optional[str], Optional[List[float]]]:
+        if image is None or image.size == 0:
+            return None, None
+
+        # Tầng 1: Decode trực tiếp trên toàn ảnh gốc
+        res_full, box_full = self._decode_variant_with_box(image)
+        if res_full:
+            return res_full, box_full
+
+        # Tầng 2: Cắt vùng ROI góc trên bên phải [0:48%H, 48%W:100%W]
+        h, w = image.shape[:2]
+        offset_x = int(w * 0.48)
+        offset_y = 0
+        qr_roi = image[0:int(h * 0.48), offset_x:w]
+        if qr_roi.size == 0:
+            return None, None
+
+        # Decode trực tiếp trên ROI gốc
+        res_roi, box_roi = self._decode_variant_with_box(qr_roi)
+        if res_roi:
+            final_box = None
+            if box_roi:
+                final_box = [box_roi[0] + offset_x, box_roi[1] + offset_y, box_roi[2] + offset_x, box_roi[3] + offset_y]
+            return res_roi, final_box
+
+        # Tầng 3: Tiền xử lý ROI
+        # + Phóng to 2x INTER_CUBIC
+        resized = cv2.resize(qr_roi, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
+        # + Chuyển sang ảnh xám (Grayscale)
+        gray = cv2.cvtColor(resized, cv2.COLOR_BGR2GRAY) if len(resized.shape) == 3 else resized
+        # + Tăng tương phản CLAHE (clipLimit=3.0, tileGridSize=(8, 8))
+        clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        enhanced = clahe.apply(gray)
+        # + Nhị phân hóa Otsu
+        _, otsu = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+        _, otsu_enhanced = cv2.threshold(enhanced, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+        # Tầng 4: Chạy thử tuần tự qua các biến thể ảnh (gốc resized, CLAHE, Otsu, xoay 180 độ)
+        variants = [
+            enhanced,
+            gray,
+            otsu,
+            otsu_enhanced,
+            resized,
+            cv2.rotate(enhanced, cv2.ROTATE_180),
+            cv2.rotate(otsu, cv2.ROTATE_180),
+        ]
+
+        for variant in variants:
+            res_var, box_var = self._decode_variant_with_box(variant)
+            if res_var:
+                final_box = None
+                if box_var:
+                    final_box = [
+                        round(box_var[0] / 2.0 + offset_x, 1),
+                        round(box_var[1] / 2.0 + offset_y, 1),
+                        round(box_var[2] / 2.0 + offset_x, 1),
+                        round(box_var[3] / 2.0 + offset_y, 1)
+                    ]
+                else:
+                    # Fallback to the ROI area if exact box was not returned by engine
+                    final_box = [float(offset_x), float(offset_y), float(w), float(int(h * 0.48))]
+                return res_var, final_box
+
+        return None, None
 
     def _try_detect_qr(self, image: np.ndarray) -> Optional[str]:
-        # Step 1: Decode on full original image (applies to any card side, any position)
-        res_full = self._decode_image_variants(image)
-        if res_full:
-            return res_full
+        text, _ = self._try_detect_qr_with_box(image)
+        return text
 
-        # Step 2: Crop top-right QR Code ROI [0:45%H, 50%W:100%W]
-        h, w = image.shape[:2]
-        qr_crop = image[0:int(h * 0.45), int(w * 0.50):w]
-        if qr_crop.size == 0:
-            return None
-
-        # Step 3: Preprocess qr_crop (Grayscale, 2x Resize CUBIC, CLAHE contrast enhancement)
-        gray = cv2.cvtColor(qr_crop, cv2.COLOR_BGR2GRAY) if len(qr_crop.shape) == 3 else qr_crop
-        resized = cv2.resize(gray, (0, 0), fx=2.0, fy=2.0, interpolation=cv2.INTER_CUBIC)
-
-        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-        enhanced_clahe = clahe.apply(resized)
-
-        adaptive_thresh = cv2.adaptiveThreshold(
-            resized, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 11, 2
-        )
-
-        # Step 4: Rotation & Otsu Thresholding Fallbacks
-        rotated_180 = cv2.rotate(resized, cv2.ROTATE_180)
-        _, otsu_thresh = cv2.threshold(resized, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-
-        variants = [resized, enhanced_clahe, adaptive_thresh, rotated_180, otsu_thresh]
-
-        # Sequentially attempt decoding on preprocessed variants
-        for variant in variants:
-            res_crop = self._decode_image_variants(variant)
-            if res_crop:
-                return res_crop
-
-        return None
 
     def parse_qr_string(self, qr_str: str) -> Optional[Dict[str, Any]]:
         parts = qr_str.split("|")

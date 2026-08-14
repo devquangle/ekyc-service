@@ -3,6 +3,7 @@ from typing import Tuple, Dict, Any, List, Optional
 from pydantic import BaseModel
 from ocr.detector import OCRText
 from ocr.field_extractor import ExtractedField
+from ocr.label_matcher import CARD_TYPE_KEYWORDS
 from ocr.layout_parser import LayoutLine
 from ocr.normalizer import normalize_text_for_compare
 from schemas.card import ExtractedCardData, CrossValidationResult, CrossValidationDetail, FieldMetadata
@@ -13,9 +14,19 @@ from config import settings
 
 class CardTypeClassifier:
     """
-    Data-Driven Card Type Classifier based on official layout keywords, chip presence,
-    document structure, MRZ, and QR indicators without hardcoding.
+    Data-Driven Card Type Classifier based on CARD_TYPE_KEYWORDS from label_matcher.
+    Scores each card type by counting how many of its distinctive keywords appear in
+    the combined OCR text (accent-stripped, lowercase). Bonus/penalty are applied for
+    MRZ presence, which is unique to CCCD_OLD.
     """
+
+    # Weight per matched keyword hit (normalised later by keyword-list length)
+    _WEIGHT_PER_HIT = 1.0
+    # Extra weight applied when a keyword is from the longer / more specific form
+    _MRZ_BONUS = 0.30
+    _MRZ_PENALTY = 0.30
+    # Minimum raw score to accept a classification
+    _MIN_SCORE = 0.25
 
     def classify(
         self,
@@ -23,56 +34,47 @@ class CardTypeClassifier:
         back_tokens: List[OCRText],
         ocr_fields: Dict[str, ExtractedField]
     ) -> Tuple[str, float]:
-        front_text = remove_vietnamese_accents(" ".join([t.text for t in front_tokens])).lower()
-        back_text = remove_vietnamese_accents(" ".join([t.text for t in back_tokens])).lower()
-        all_text = front_text + " " + back_text
+        from utils.text_utils import remove_vietnamese_accents
 
-        score_new = 0.0
-        score_old = 0.0
+        front_text = remove_vietnamese_accents(" ".join(t.text for t in front_tokens)).lower()
+        back_text  = remove_vietnamese_accents(" ".join(t.text for t in back_tokens)).lower()
+        all_text   = front_text + " " + back_text
 
-        # NEW CARD Distinctive Indicators (Thẻ Căn Cước Luật 2023 / Chip Card)
-        if "can cuoc" in front_text and "can cuoc cong dan" not in front_text:
-            score_new += 0.40
-        if "identity card" in front_text and "citizen identity card" not in front_text:
-            score_new += 0.30
-        if "so dinh danh ca nhan" in front_text or "personal identification" in front_text:
-            score_new += 0.30
-        if "noi dang ky khai sinh" in all_text or "place of birth registration" in all_text:
-            score_new += 0.35
-        if "noi cu tru" in all_text:
-            score_new += 0.25
-        if "bo cong an" in back_text or "ministry of public security" in back_text:
-            score_new += 0.20
-        # CCCD_NEW has no MRZ indicator — presence of MRZ-type content reduces new score
-        has_mrz_indicator = any(t for t in back_tokens if len(t.text) >= 30 and "<" in t.text)
+        scores: Dict[str, float] = {}
+        for card_type, keywords in CARD_TYPE_KEYWORDS.items():
+            hits = sum(
+                1 for kw in keywords
+                if remove_vietnamese_accents(kw).lower() in all_text
+            )
+            # Normalise by list length so both card types are comparable
+            scores[card_type] = hits / max(len(keywords), 1)
+
+        # MRZ indicator: CCCD_OLD back has MRZ lines (≥30 chars, contains '<')
+        has_mrz_indicator = any(
+            t for t in back_tokens if len(t.text) >= 30 and "<" in t.text
+        )
         if has_mrz_indicator:
-            score_new -= 0.30
+            scores["CCCD_OLD"] = scores.get("CCCD_OLD", 0.0) + self._MRZ_BONUS
+            scores["CCCD_NEW"] = max(0.0, scores.get("CCCD_NEW", 0.0) - self._MRZ_PENALTY)
 
-        # OLD CARD Distinctive Indicators (CCCD 12-digit without chip / 9-digit CMND)
-        if "can cuoc cong dan" in front_text:
-            score_old += 0.40
-        if "citizen identity card" in front_text:
-            score_old += 0.30
-        if "que quan" in front_text or "place of origin" in front_text:
-            score_old += 0.35
-        if "noi thuong tru" in front_text:
-            score_old += 0.35
-        if has_mrz_indicator:
-            score_old += 0.30
+        logger.info(
+            f"[CARD_CLASSIFIER] Scores: "
+            + " | ".join(f"{k}={v:.3f}" for k, v in scores.items())
+        )
 
-        logger.info(f"[CARD_CLASSIFIER] New Score: {score_new:.2f}, Old Score: {score_old:.2f}")
+        if not front_tokens and not back_tokens:
+            return "UNKNOWN", 0.0
 
-        if score_new > score_old and score_new >= 0.30:
-            conf = 0.95 if score_new >= 0.60 else round(min(0.95, score_new + 0.30), 2)
-            return "CCCD_NEW", conf
-        elif score_old > score_new and score_old >= 0.30:
-            conf = 0.95 if score_old >= 0.60 else round(min(0.95, score_old + 0.30), 2)
-            return "CCCD_OLD", conf
-        else:
-            if not front_tokens and not back_tokens:
-                return "UNKNOWN", 0.0
-            c_type = "CCCD_NEW" if score_new >= score_old else "CCCD_OLD"
-            return c_type, 0.70
+        best_type = max(scores, key=scores.__getitem__) if scores else "CCCD_OLD"
+        best_score = scores.get(best_type, 0.0)
+
+        if best_score < self._MIN_SCORE:
+            # Cannot distinguish — return best guess with low confidence
+            return best_type, 0.70
+
+        # Map normalised score [0,1] → confidence [0.70, 0.99]
+        conf = round(min(0.99, 0.70 + best_score * 0.29), 2)
+        return best_type, conf
 
 
 class CrossValidator:
