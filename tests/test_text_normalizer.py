@@ -207,3 +207,9 @@ def test_hierarchical_fuzzy_restorer_provinces_and_districts():
     t5 = VietnameseAdministrativeRestorer.restore_address_diacritics("Quan 1, TP Ho Chi Minh")
     assert "Quận 1" in t5 and "Hồ Chí Minh" in t5
 
+    # Test 6: Leaked label header removal
+    t6 = VietnameseAdministrativeRestorer.restore_address_diacritics("Noi thurng trư/ Place of residence Ap Tay Tan Binh, Chau Thanh, Dong Thap")
+    assert "Noi thurng" not in t6 and "Place of residence" not in t6
+    assert "Ấp Tây" in t6 and "Tân Bình" in t6 and "Châu Thành" in t6 and "Đồng Tháp" in t6
+
+

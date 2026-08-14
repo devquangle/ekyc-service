@@ -468,6 +468,18 @@ class VietnameseAdministrativeRestorer:
         norm = re.sub(r'(?<=[a-zA-Z\u00C0-\u1EF9]{2})\.(?=[a-zA-Z0-9\u00C0-\u1EF9])', ', ', norm)
         norm = re.sub(r'(?<=[a-zA-Z\u00C0-\u1EF9]{2})\.\s+(?=[a-zA-Z0-9\u00C0-\u1EF9])', ', ', norm)
 
+        # Loại bỏ các nhãn tiêu đề OCR bị lẫn vào chuỗi địa chỉ
+        # (VD: "Noi thurng trư/ Place of residence", "Place of origin:", "Nơi thường trú:")
+        norm = re.sub(
+            r'^(?:n[o\u01a1]i\s+)?(?:th[u\u01b0][o\u01a1]ng|thurng|c[u\u01b0]|thuong)\s*(?:tr[u\u00fa\u01b0]|tru)?\s*(?:[\/\-:\.]|\s+)*(?:place\s+of\s+residence|residence)?[:\s\/._,-]*',
+            '', norm, flags=re.IGNORECASE
+        ).strip()
+        norm = re.sub(
+            r'^(?:qu[e\xea]\s+qu[a\xe1]n|noi\s+dang\s+ky\s+khai\s+sinh|dang\s+ky\s+khai\s+sinh|khai\s+sinh)\s*(?:[\/\-:\.]|\s+)*(?:place\s+of\s+origin|place\s+of\s+birth(?:\s+registration)?)?[:\s\/._,-]*',
+            '', norm, flags=re.IGNORECASE
+        ).strip()
+        norm = re.sub(r'^(?:place\s+of\s+(?:residence|origin|birth(?:\s+registration)?)|pace\s+of\s+brth|residence)[:\s\/._,-]*', '', norm, flags=re.IGNORECASE).strip()
+
         # Normalize unit prefixes like 'T09', 'T.9', 'To 9' -> 'Tổ 9'
         norm = re.sub(r'\bT0?(\d+)\b', r'Tổ \1', norm)
         norm = re.sub(r'\bTo\s+(\d+)\b', r'Tổ \1', norm)

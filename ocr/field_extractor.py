@@ -126,20 +126,34 @@ class FieldExtractor:
             return []
 
         inline_val = self._strip_header_label(line.text, field_name)
-        if not inline_val or inline_val == line.text:
-            return line.tokens
+        if inline_val and inline_val != line.text:
+            val_words = [w for w in re.split(r'\W+', remove_vietnamese_accents(inline_val).lower()) if w]
+            val_tokens = []
+            for token in line.tokens:
+                tok_words = [w for w in re.split(r'\W+', remove_vietnamese_accents(token.text).lower()) if w]
+                if any(w in val_words for w in tok_words):
+                    val_tokens.append(token)
+            if val_tokens:
+                return val_tokens
 
-        val_words = [w for w in re.split(r'\W+', remove_vietnamese_accents(inline_val).lower()) if w]
-        if not val_words:
-            return line.tokens
-
-        val_tokens = []
+        # Fallback: remove known label noise tokens from start
+        label_noise_words = {
+            "placeOfResidence": {"noi", "thuong", "thurng", "tru", "trư", "cu", "place", "of", "residence", "pace", "cfcnc"},
+            "placeOfOrigin": {"que", "quan", "noi", "dang", "ky", "khai", "sinh", "place", "of", "origin", "birth", "registration", "pace", "brth"},
+            "fullName": {"ho", "chu", "dem", "va", "ten", "khai", "sinh", "full", "name", "surname", "given", "names"},
+            "dateOfBirth": {"ngay", "thang", "nam", "sinh", "date", "of", "birth", "dob"},
+            "gender": {"gioi", "tinh", "sex"},
+            "nationality": {"quoc", "tich", "nationality"},
+            "identityNumber": {"so", "dinh", "danh", "ca", "nhan", "no", "personal", "identification", "number"},
+        }
+        noise = label_noise_words.get(field_name, set())
+        filtered = []
         for token in line.tokens:
-            tok_words = [w for w in re.split(r'\W+', remove_vietnamese_accents(token.text).lower()) if w]
-            if any(w in val_words for w in tok_words):
-                val_tokens.append(token)
+            tok_clean = remove_vietnamese_accents(token.text).lower().strip(":/._-")
+            if tok_clean not in noise and not any(w in noise for w in tok_clean.split()):
+                filtered.append(token)
 
-        return val_tokens if val_tokens else line.tokens
+        return filtered
 
     def _compute_merged_bbox(self, tokens: List[OCRText]) -> Optional[List[List[float]]]:
         """
@@ -799,23 +813,31 @@ class FieldExtractor:
         return None
 
     def _strip_header_label(self, line_text: str, field_name: str) -> Optional[str]:
-        kw_list = FIELD_LABELS.get(field_name, [])
-        if not kw_list:
+        if not line_text:
             return None
 
-        # Build regex matching exact card labels for this field
-        kw_patterns = [re.escape(k) for k in sorted(kw_list, key=len, reverse=True)]
-        pattern_str = r'^.*?(?:' + '|'.join(kw_patterns) + r')[:\s\/._]*'
+        cleaned = line_text
 
-        cleaned = re.sub(pattern_str, '', line_text, flags=re.IGNORECASE).strip()
+        # 1. Direct regex strip for all known label patterns of this field
+        kw_list = FIELD_LABELS.get(field_name, [])
+        if kw_list:
+            kw_patterns = [re.escape(k) for k in sorted(kw_list, key=len, reverse=True)]
+            pattern_str = r'^.*?(?:' + '|'.join(kw_patterns) + r')[:\s\/._]*'
+            cleaned = re.sub(pattern_str, '', cleaned, flags=re.IGNORECASE).strip()
 
-        # Also strip unaccented versions if OCR missed accents
-        if cleaned == line_text:
             unaccented_patterns = [re.escape(remove_vietnamese_accents(k)) for k in sorted(kw_list, key=len, reverse=True)]
             unaccented_regex = r'^.*?(?:' + '|'.join(unaccented_patterns) + r')[:\s\/._]*'
-            cleaned = re.sub(unaccented_regex, '', line_text, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(unaccented_regex, '', cleaned, flags=re.IGNORECASE).strip()
 
-        # Strip remaining noisy English label remnants at the start (e.g. "Pace of brth", "Place of birth", "Place of origin")
+        # 2. Aggressive field-specific label stripping
+        if field_name == "placeOfResidence":
+            cleaned = re.sub(r'^(?:n[o\u01a1]i\s+)?(?:th[u\u01b0][o\u01a1]ng|thurng|c[u\u01b0]|thuong)\s*(?:tr[u\u00fa\u01b0]|tru)?\s*(?:[\/\-:\.]|\s+)*(?:place\s+of\s+residence|residence)?[:\s\/._]*', '', cleaned, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r'^(?:place\s+of\s+residence|pace\s+of\s+residence|residence)[:\s\/._]*', '', cleaned, flags=re.IGNORECASE).strip()
+        elif field_name == "placeOfOrigin":
+            cleaned = re.sub(r'^(?:qu[e\xea]\s+qu[a\xe1]n|noi\s+dang\s+ky\s+khai\s+sinh|dang\s+ky\s+khai\s+sinh|khai\s+sinh)\s*(?:[\/\-:\.]|\s+)*(?:place\s+of\s+origin|place\s+of\s+birth(?:\s+registration)?)?[:\s\/._]*', '', cleaned, flags=re.IGNORECASE).strip()
+            cleaned = re.sub(r'^(?:place\s+of\s+origin|place\s+of\s+birth(?:\s+registration)?|pace\s+of\s+brth)[:\s\/._]*', '', cleaned, flags=re.IGNORECASE).strip()
+
+        # 3. Strip remaining noisy English label remnants at the start
         en_patterns = r'^(?:place\s+of\s+birth(?:\s+registration)?|pace\s+of\s+brth|place\s+of\s+origin|place\s+of\s+residence|date\s+of\s+issue|date\s+of\s+expiry|date,\s*month,\s*year|surname,\s*given\s*names|full\s*name|personal\s*identification\s*number|no\.?|sex|nationality)[:\s\/._]*'
         cleaned = re.sub(en_patterns, '', cleaned, flags=re.IGNORECASE).strip()
 
