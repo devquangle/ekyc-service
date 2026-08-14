@@ -55,8 +55,8 @@ def test_real_cccd_old_extraction(real_images_dir):
     assert extracted_data.dateOfBirth == "2004-10-04"
     assert extracted_data.gender == "Nam"
     assert extracted_data.nationality == "Việt Nam"
-    assert "Tan Binh" in extracted_data.placeOfOrigin or "Châu" in extracted_data.placeOfOrigin or "Chau" in extracted_data.placeOfOrigin
-    assert "Ap Tay" in extracted_data.placeOfResidence
+    assert "Tân Bình" in extracted_data.placeOfOrigin and "Châu Thành" in extracted_data.placeOfOrigin and "Đồng Tháp" in extracted_data.placeOfOrigin
+    assert "Ấp Tây" in extracted_data.placeOfResidence and "Đồng Tháp" in extracted_data.placeOfResidence
     assert extracted_data.dateOfIssue == "2021-03-30"
     assert extracted_data.dateOfExpiry == "2029-10-04"
 
@@ -111,8 +111,8 @@ def test_real_cccd_new_extraction(real_images_dir):
     assert extracted_data.dateOfBirth == "2003-12-24"
     assert extracted_data.gender == "Nam"
     assert extracted_data.nationality == "Việt Nam"
-    assert "Tan Phu Trung" in extracted_data.placeOfOrigin or "Tân Phú Trung" in extracted_data.placeOfOrigin
-    assert "Phu Binh" in extracted_data.placeOfResidence or "Phú Bình" in extracted_data.placeOfResidence
+    assert "Tân Phú Trung" in extracted_data.placeOfOrigin and "Đồng Tháp" in extracted_data.placeOfOrigin
+    assert "Tổ 9" in extracted_data.placeOfResidence and "Ấp Phú Bình" in extracted_data.placeOfResidence and "Đồng Tháp" in extracted_data.placeOfResidence
     assert extracted_data.dateOfIssue == "2026-02-23"
     assert extracted_data.dateOfExpiry == "2028-12-24"
 

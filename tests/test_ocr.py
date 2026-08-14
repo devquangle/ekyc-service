@@ -102,9 +102,9 @@ def test_normalize_full_name():
 
 
 def test_normalize_address():
-    norm, raw = normalize_address("123 Đường  Nguyễn Trãi,\n P.5, Q.1")
-    assert norm == "123 Đường Nguyễn Trãi, P.5, Q.1"
-    assert raw == "123 Đường Nguyễn Trãi, P.5, Q.1"
+    restored, canonical = normalize_address("123 Đường  Nguyễn Trãi,\n P.5, Q.1")
+    assert restored == "123 Đường Nguyễn Trãi, P.5, Q.1"
+    assert "123 DUONG NGUYEN TRAI" in canonical
 
     cmp = normalize_address_for_compare("123 Đường Nguyễn Trãi, P.5, Q.1")
     assert "123 DUONG NGUYEN TRAI P 5 Q 1" in cmp or "123 DUONG NGUYEN TRAI P5 Q1" in cmp
@@ -183,8 +183,8 @@ def test_residence_not_lost_when_same_line_as_expiry():
     fields = extractor.extract_all_fields(tokens)
     assert "placeOfResidence" in fields, "placeOfResidence must be extracted"
     val = fields["placeOfResidence"].value
-    assert "Tay" in val, f"Address fragment (Ap Tay) missing from value: {val}"
-    assert "Binh" in val or "Chau Thanh" in val, f"Address second line missing from value: {val}"
+    assert "Tây" in val or "Tay" in val, f"Address fragment (Ap Tay) missing from value: {val}"
+    assert "Bình" in val or "Binh" in val or "Châu Thành" in val, f"Address second line missing from value: {val}"
     assert "2029" not in val, f"Date leaked into address value: {val}"
 
 
@@ -237,10 +237,10 @@ def test_cccd_new_back_address_fields():
     fields = extractor.extract_all_fields(tokens)
     assert "placeOfResidence" in fields
     res_val = fields["placeOfResidence"].value
-    assert "Phu" in res_val, f"placeOfResidence incomplete: {res_val}"
+    assert "Phú" in res_val or "Phu" in res_val, f"placeOfResidence incomplete: {res_val}"
     assert "placeOfOrigin" in fields
     orig_val = fields["placeOfOrigin"].value
-    assert "Tan Phu Trung" in orig_val, f"placeOfOrigin incorrect: {orig_val}"
+    assert "Tân Phú Trung" in orig_val or "Tan Phu Trung" in orig_val, f"placeOfOrigin incorrect: {orig_val}"
 
 
 def test_separate_label_and_value_boxes_cccd_old():

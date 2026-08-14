@@ -145,9 +145,12 @@ def normalize_full_name(raw_name: Optional[str]) -> Tuple[Optional[str], Optiona
 
 def normalize_address(raw_address: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """
-    Normalizes administrative address preserving original word boundaries, accents, and casing.
-    Applies data-driven administrative diacritics restoration from official GSO gazetteer.
-    Returns a tuple of (normalized_value, clean_raw_text).
+    Normalizes administrative address:
+    - Uses VietnameseAdministrativeRestorer.restore_address_diacritics(raw_address)
+      to automatically restore Vietnamese diacritics and standardize administrative prefixes (Ấp, Xã, Huyện, Tỉnh, Tổ, Khóm).
+    - Returns tuple (restored_text, canonical_text):
+      + restored_text: Fully diacritic-restored Vietnamese address (e.g. 'Ấp Tây, Tân Bình, Châu Thành, Đồng Tháp').
+      + canonical_text: Standardized uppercase unaccented address (e.g. 'AP TAY, TAN BINH, CHAU THANH, DONG THAP').
     """
     if not raw_address:
         return None, None
@@ -156,8 +159,9 @@ def normalize_address(raw_address: Optional[str]) -> Tuple[Optional[str], Option
     if not ocr_val:
         return None, None
 
-    restored = VietnameseAdministrativeRestorer.restore_address_diacritics(ocr_val)
-    return (restored or ocr_val), ocr_val
+    restored = VietnameseAdministrativeRestorer.restore_address_diacritics(ocr_val) or ocr_val
+    canonical = remove_vietnamese_accents(restored).upper()
+    return restored, canonical
 
 
 def normalize_address_for_compare(raw_address: Optional[str]) -> Optional[str]:

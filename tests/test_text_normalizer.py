@@ -177,3 +177,33 @@ def test_json_dumps_utf8_direct_representation():
     assert "Việt Nam" in json_str
     assert "Đồng Tháp" in json_str
     assert "Tân Bình" in json_str
+
+
+# ---------------------------------------------------------------------------
+# 5. 3-Level Hierarchical & Fuzzy Administrative Restorer Tests
+# ---------------------------------------------------------------------------
+
+def test_hierarchical_fuzzy_restorer_provinces_and_districts():
+    from utils.vietnamese_administrative_restorer import VietnameseAdministrativeRestorer
+
+    # Test 1: Tan Luoc, Binh Tan, Vinh Long
+    t1 = VietnameseAdministrativeRestorer.restore_address_diacritics("Tan Luoc.Binh Tan.Vinh Long")
+    assert "Tân Lược" in t1 and "Bình Tân" in t1 and "Vĩnh Long" in t1
+
+    # Test 2: To 09, Ap Phu Binh Tan Phu Trung. Dong Thap
+    t2 = VietnameseAdministrativeRestorer.restore_address_diacritics("To 09, Ap Phu Binh Tan Phu Trung. Dong Thap")
+    assert "Tổ 9" in t2 or "Tổ 09" in t2
+    assert "Ấp Phú Bình" in t2 and "Tân Phú Trung" in t2 and "Đồng Tháp" in t2
+
+    # Test 3: Ap Tay, Tan Binh, Chau Thanh, Dong Thap
+    t3 = VietnameseAdministrativeRestorer.restore_address_diacritics("Ap Tay, Tan Binh, Chau Thanh, Dong Thap")
+    assert "Ấp Tây" in t3 and "Tân Bình" in t3 and "Châu Thành" in t3 and "Đồng Tháp" in t3
+
+    # Test 4: Ba Dinh, Ha Noi
+    t4 = VietnameseAdministrativeRestorer.restore_address_diacritics("Ba Dinh, Ha Noi")
+    assert "Ba Đình" in t4 and "Hà Nội" in t4
+
+    # Test 5: Quan 1, TP Ho Chi Minh
+    t5 = VietnameseAdministrativeRestorer.restore_address_diacritics("Quan 1, TP Ho Chi Minh")
+    assert "Quận 1" in t5 and "Hồ Chí Minh" in t5
+

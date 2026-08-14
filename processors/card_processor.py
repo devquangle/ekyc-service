@@ -14,6 +14,7 @@ from utils.card_aligner import CardAligner
 from utils.image_utils import check_image_quality
 from utils.text_utils import remove_vietnamese_accents
 from utils.text_normalizer import VietnameseTextCorrector
+from utils.vietnamese_administrative_restorer import VietnameseAdministrativeRestorer
 from utils.logger import logger
 from config import settings
 
@@ -44,9 +45,9 @@ class CardProcessor:
         field_name: str
     ) -> Optional[str]:
         """
-        Fallback Priority for ExtractedCardData with sticky word normalization for fullName:
-        1. OCR extracted value
-        2. QR decoded value
+        Resolves field value using prioritized sources:
+        1. OCR extracted field
+        2. QR Code fallback
         3. MRZ parsed value
         """
         ocr_ext = all_ocr_fields.get(field_name)
@@ -63,6 +64,19 @@ class CardProcessor:
                 if k_ocr == k_better and ocr_val.count(" ") < better_name.count(" "):
                     logger.info(f"[CARD_PROCESSOR] Replacing sticky OCR name '{ocr_val}' with properly spaced name '{better_name}'")
                     return better_name
+
+        # Address fields: ensure full diacritic restoration & cross-validation with QR
+        if field_name in ("placeOfResidence", "placeOfOrigin"):
+            if qr_val and not ocr_val:
+                return VietnameseAdministrativeRestorer.restore_address_diacritics(qr_val) or qr_val
+            if ocr_val:
+                restored_ocr = VietnameseAdministrativeRestorer.restore_address_diacritics(ocr_val) or ocr_val
+                if qr_val:
+                    restored_qr = VietnameseAdministrativeRestorer.restore_address_diacritics(qr_val) or qr_val
+                    # If QR has more complete accents or content, prefer QR
+                    if len(restored_qr) > len(restored_ocr):
+                        return restored_qr
+                return restored_ocr
 
         if ocr_val:
             return ocr_val

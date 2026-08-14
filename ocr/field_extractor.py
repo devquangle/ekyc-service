@@ -560,16 +560,16 @@ class FieldExtractor:
                 if any(kw in clean_j for kw in stop_keywords) or re.search(stop_patterns, clean_j):
                     break
 
-        if not gathered_text_parts:
+        if not gathered_tokens and not gathered_text_parts:
             return None
 
-        raw_joined = " ".join(gathered_text_parts)
-        norm_val, clean_raw = normalize_address(raw_joined)
+        raw_text = " ".join([t.text for t in gathered_tokens]) if gathered_tokens else " ".join(gathered_text_parts)
+        restored_address, canonical_address = normalize_address(raw_text)
 
-        if not norm_val:
+        if not restored_address:
             return None
 
-        logger.info(f"[FIELD_EXTRACTOR] {field_name} raw='{clean_raw}' normalized='{norm_val}'")
+        logger.info(f"[FIELD_EXTRACTOR] {field_name} raw='{raw_text}' restored='{restored_address}'")
 
         label_box = self._compute_bbox_4(lbl_tokens)
         value_box = self._compute_bbox_4(gathered_tokens)
@@ -578,8 +578,8 @@ class FieldExtractor:
 
         return ExtractedField(
             fieldName=field_name,
-            value=norm_val,
-            rawText=clean_raw,
+            value=restored_address,
+            rawText=raw_text,
             keyword=kw_text,
             language="VI/EN",
             confidence=round(kw_line.confidence, 2),

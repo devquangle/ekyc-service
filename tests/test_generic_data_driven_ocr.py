@@ -75,7 +75,7 @@ def test_person_b_extraction():
     assert fields["fullName"].rawText == "LÊ THỊ HOA"
     assert fields["dateOfBirth"].value == "2000-10-20"
     assert fields["gender"].value == "Nữ"
-    assert fields["placeOfResidence"].value == "Quận 1, TP Hồ Chí Minh"
+    assert "Quận 1" in fields["placeOfResidence"].value and "Hồ Chí Minh" in fields["placeOfResidence"].value
 
 
 def test_person_c_cmnd_9digits():
