@@ -1,7 +1,7 @@
 import base64
 import re
-from typing import Optional, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import Optional, Union, Any
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Request
 from api.dependencies import get_orchestrator
 from schemas.face import FaceVerifyResponse
 from services.ekyc_orchestrator import EkycOrchestrator
@@ -47,6 +47,8 @@ async def _extract_image_bytes(val: Any) -> Optional[bytes]:
 @router.post("/ekyc/face/verify", response_model=FaceVerifyResponse, summary="Face Verification (Card Portrait vs Selfie)")
 async def verify_face(
     request: Request,
+    card_portrait: Optional[Union[UploadFile, str]] = File(None, description="Card image or cropped portrait (Upload file or Base64 string)"),
+    selfie_image: Optional[Union[UploadFile, str]] = File(None, description="Selfie image of user (Upload file or Base64 string)"),
     orchestrator: EkycOrchestrator = Depends(get_orchestrator)
 ):
     card_bytes = None
@@ -87,6 +89,11 @@ async def verify_face(
 
     # 2. Multipart form upload
     if card_bytes is None or selfie_bytes is None:
+        if card_portrait and not card_bytes:
+            card_bytes = await _extract_image_bytes(card_portrait)
+        if selfie_image and not selfie_bytes:
+            selfie_bytes = await _extract_image_bytes(selfie_image)
+
         try:
             form = await request.form()
             if not card_bytes:

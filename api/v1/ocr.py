@@ -1,7 +1,7 @@
 import base64
 import re
-from typing import Optional, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import Optional, Union, Any
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Request
 from api.dependencies import get_orchestrator
 from schemas.card import CardProcessResponse
 from services.ekyc_orchestrator import EkycOrchestrator
@@ -23,9 +23,6 @@ def _decode_b64_image(b64_str: str) -> Optional[bytes]:
 
 
 async def _extract_image_bytes(val: Any) -> Optional[bytes]:
-    """
-    Universally extracts raw image bytes from UploadFile, str (Base64 or binary string), or bytes.
-    """
     if val is None:
         return None
     if hasattr(val, "read"):
@@ -52,6 +49,8 @@ async def _extract_image_bytes(val: Any) -> Optional[bytes]:
 @router.post("/ekyc/card", response_model=CardProcessResponse, summary="Extract and Validate ID Card Data")
 async def extract_card(
     request: Request,
+    front_image: Optional[Union[UploadFile, str]] = File(None, description="Front side image of ID card (Upload file or Base64 string)"),
+    back_image: Optional[Union[UploadFile, str]] = File(None, description="Back side image of ID card (Upload file or Base64 string)"),
     orchestrator: EkycOrchestrator = Depends(get_orchestrator)
 ):
     front_bytes = None
@@ -91,35 +90,34 @@ async def extract_card(
 
     # 2. Handle Multipart Form-Data or URL-Encoded Form
     if front_bytes is None:
-        try:
-            form = await request.form()
-            for key in ["front_image", "frontImage", "card_front", "cardFront", "front", "image_front", "file_front", "file", "image"]:
-                if key in form:
-                    front_bytes = await _extract_image_bytes(form[key])
-                    if front_bytes:
-                        break
-            for key in ["back_image", "backImage", "card_back", "cardBack", "back", "image_back", "file_back"]:
-                if key in form:
-                    back_bytes = await _extract_image_bytes(form[key])
-                    if back_bytes:
-                        break
-        except Exception:
-            pass
+        if front_image:
+            front_bytes = await _extract_image_bytes(front_image)
+        if back_image:
+            back_bytes = await _extract_image_bytes(back_image)
 
-    # 3. Fallback to raw request body if binary stream was sent directly
-    if front_bytes is None:
-        try:
-            raw_body = await request.body()
-            if raw_body and len(raw_body) > 30:
-                if raw_body.startswith(b'\xff\xd8') or raw_body.startswith(b'\x89PNG') or raw_body.startswith(b'RIFF'):
-                    front_bytes = raw_body
-        except Exception:
-            pass
+        # Fallback check dynamically across aliases in form
+        if not front_bytes or not back_bytes:
+            try:
+                form = await request.form()
+                if not front_bytes:
+                    for key in ["front_image", "frontImage", "card_front", "cardFront", "front", "image_front", "file_front", "file", "image"]:
+                        if key in form:
+                            front_bytes = await _extract_image_bytes(form[key])
+                            if front_bytes:
+                                break
+                if not back_bytes:
+                    for key in ["back_image", "backImage", "card_back", "cardBack", "back", "image_back", "file_back"]:
+                        if key in form:
+                            back_bytes = await _extract_image_bytes(form[key])
+                            if back_bytes:
+                                break
+            except Exception:
+                pass
 
     if not front_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing required front card image. Please provide front_image (or frontImage) via multipart form-data or JSON base64."
+            detail="Missing required front card image. Please provide front_image via multipart form-data or JSON base64."
         )
 
     if len(front_bytes) > max_size_bytes or (back_bytes and len(back_bytes) > max_size_bytes):

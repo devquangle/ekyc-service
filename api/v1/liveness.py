@@ -1,7 +1,7 @@
 import base64
 import re
-from typing import Optional, List, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import Optional, List, Union, Any
+from fastapi import APIRouter, UploadFile, File, Form, Depends, HTTPException, status, Request
 from api.dependencies import get_orchestrator
 from schemas.liveness import LivenessResponse
 from services.ekyc_orchestrator import EkycOrchestrator
@@ -47,10 +47,12 @@ async def _extract_video_bytes(val: Any) -> Optional[bytes]:
 @router.post("/ekyc/face/liveness", response_model=LivenessResponse, summary="Video Liveness & Anti-Spoofing Detection")
 async def detect_liveness(
     request: Request,
+    video_file: Optional[Union[UploadFile, str]] = File(None, description="Recorded video file (Upload MP4/WebM or Base64 string)"),
+    expected_gestures: Optional[str] = Form(None, description="Comma-separated expected active gestures (e.g. BLINK,TURN_LEFT)"),
     orchestrator: EkycOrchestrator = Depends(get_orchestrator)
 ):
     video_bytes = None
-    expected_gestures = None
+    gestures_str = expected_gestures
     max_size_bytes = settings.MAX_VIDEO_SIZE_MB * 1024 * 1024
 
     content_type = request.headers.get("content-type", "").lower()
@@ -62,7 +64,7 @@ async def detect_liveness(
             if isinstance(body, dict):
                 v_val = body.get("video_file") or body.get("videoFile") or body.get("video") or body.get("file")
                 video_bytes = await _extract_video_bytes(v_val)
-                expected_gestures = body.get("expected_gestures") or body.get("expectedGestures") or body.get("gestures")
+                gestures_str = body.get("expected_gestures") or body.get("expectedGestures") or body.get("gestures")
         except Exception as json_err:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -71,17 +73,21 @@ async def detect_liveness(
 
     # 2. Multipart form upload
     if video_bytes is None:
+        if video_file:
+            video_bytes = await _extract_video_bytes(video_file)
+
         try:
             form = await request.form()
-            for key in ["video_file", "videoFile", "video", "file"]:
-                if key in form:
-                    video_bytes = await _extract_video_bytes(form[key])
-                    if video_bytes:
-                        break
-            if not expected_gestures:
+            if not video_bytes:
+                for key in ["video_file", "videoFile", "video", "file"]:
+                    if key in form:
+                        video_bytes = await _extract_video_bytes(form[key])
+                        if video_bytes:
+                            break
+            if not gestures_str:
                 for key in ["expected_gestures", "expectedGestures", "gestures"]:
                     if key in form and isinstance(form[key], str):
-                        expected_gestures = form[key]
+                        gestures_str = form[key]
                         break
         except Exception:
             pass
@@ -89,7 +95,7 @@ async def detect_liveness(
     if not video_bytes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Missing required video_file (or videoFile)."
+            detail="Missing required video_file."
         )
 
     if len(video_bytes) > max_size_bytes:
@@ -99,11 +105,11 @@ async def detect_liveness(
         )
 
     gestures_list: Optional[List[str]] = None
-    if expected_gestures:
-        if isinstance(expected_gestures, list):
-            gestures_list = [str(g).strip().upper() for g in expected_gestures if str(g).strip()]
-        elif isinstance(expected_gestures, str):
-            gestures_list = [g.strip().upper() for g in expected_gestures.split(",") if g.strip()]
+    if gestures_str:
+        if isinstance(gestures_str, list):
+            gestures_list = [str(g).strip().upper() for g in gestures_str if str(g).strip()]
+        elif isinstance(gestures_str, str):
+            gestures_list = [g.strip().upper() for g in gestures_str.split(",") if g.strip()]
 
     response = orchestrator.detect_liveness(video_bytes, gestures_list)
     return response

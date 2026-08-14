@@ -1,7 +1,7 @@
 import base64
 import re
-from typing import Optional, Any
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from typing import Optional, Union, Any
+from fastapi import APIRouter, UploadFile, File, Depends, HTTPException, status, Request
 from api.dependencies import get_orchestrator
 from schemas.ekyc import FullEkycResponse
 from services.ekyc_orchestrator import EkycOrchestrator
@@ -47,6 +47,10 @@ async def _extract_bytes(val: Any) -> Optional[bytes]:
 @router.post("/ekyc/verify", response_model=FullEkycResponse, summary="Full Orchestrated eKYC Verification Pipeline")
 async def process_full_ekyc(
     request: Request,
+    front_image: Optional[Union[UploadFile, str]] = File(None, description="Front side ID card image (Upload file or Base64 string)"),
+    back_image: Optional[Union[UploadFile, str]] = File(None, description="Back side ID card image (Upload file or Base64 string)"),
+    selfie_image: Optional[Union[UploadFile, str]] = File(None, description="Selfie photo for face verification (Upload file or Base64 string)"),
+    video_file: Optional[Union[UploadFile, str]] = File(None, description="Video file for liveness verification (Upload file or Base64 string)"),
     orchestrator: EkycOrchestrator = Depends(get_orchestrator)
 ):
     front_bytes = None
@@ -80,28 +84,41 @@ async def process_full_ekyc(
 
     # 2. Multipart form upload
     if front_bytes is None:
+        if front_image:
+            front_bytes = await _extract_bytes(front_image)
+        if back_image:
+            back_bytes = await _extract_bytes(back_image)
+        if selfie_image:
+            selfie_bytes = await _extract_bytes(selfie_image)
+        if video_file:
+            video_bytes = await _extract_bytes(video_file)
+
         try:
             form = await request.form()
-            for key in ["front_image", "frontImage", "card_front", "cardFront", "front", "image_front", "file_front", "image", "file"]:
-                if key in form:
-                    front_bytes = await _extract_bytes(form[key])
-                    if front_bytes:
-                        break
-            for key in ["back_image", "backImage", "card_back", "cardBack", "back", "image_back", "file_back"]:
-                if key in form:
-                    back_bytes = await _extract_bytes(form[key])
-                    if back_bytes:
-                        break
-            for key in ["selfie_image", "selfieImage", "selfie", "face_image", "faceImage", "face"]:
-                if key in form:
-                    selfie_bytes = await _extract_bytes(form[key])
-                    if selfie_bytes:
-                        break
-            for key in ["video_file", "videoFile", "video"]:
-                if key in form:
-                    video_bytes = await _extract_bytes(form[key])
-                    if video_bytes:
-                        break
+            if not front_bytes:
+                for key in ["front_image", "frontImage", "card_front", "cardFront", "front", "image_front", "file_front", "image", "file"]:
+                    if key in form:
+                        front_bytes = await _extract_bytes(form[key])
+                        if front_bytes:
+                            break
+            if not back_bytes:
+                for key in ["back_image", "backImage", "card_back", "cardBack", "back", "image_back", "file_back"]:
+                    if key in form:
+                        back_bytes = await _extract_bytes(form[key])
+                        if back_bytes:
+                            break
+            if not selfie_bytes:
+                for key in ["selfie_image", "selfieImage", "selfie", "face_image", "faceImage", "face"]:
+                    if key in form:
+                        selfie_bytes = await _extract_bytes(form[key])
+                        if selfie_bytes:
+                            break
+            if not video_bytes:
+                for key in ["video_file", "videoFile", "video"]:
+                    if key in form:
+                        video_bytes = await _extract_bytes(form[key])
+                        if video_bytes:
+                            break
         except Exception:
             pass
 
