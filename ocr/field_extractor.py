@@ -153,7 +153,20 @@ class FieldExtractor:
             clean = re.sub(r'(?i)\b' + escaped + r'\b[:\.\s/]*', '', clean)
             clean = re.sub(r'(?i)^' + escaped + r'[:\.\s/]*', '', clean)
 
-        clean = re.sub(r'^(?:s[o\u1ed1]\s*[\/:]\s*no\.?|s[o\u1ed1]\s*[:\.\s]|no\.?[:\s]|h[o\u1ecd]\s*v[a\u00e0]\s*t[e\u00ean][:\s\/]*|full\s*name[:\s\/]*|ng[a\u00e0]y\s*sinh[:\s\/]*|date\s*of\s*birth[:\s\/]*|gi[o\u1edbi]\s*t[i\u00ed]nh[:\s\/]*|sex[:\s\/]*|qu[o\u1ed1]c\s*t[i\u1ecb]ch[:\s\/]*|nationality[:\s\/]*|qu[e\u00ea]\s*qu[a\u00e1]n[:\s\/]*|place\s*of\s*origin[:\s\/]*|n[o\u01a1]i\s*th[u\u01b0\u1edd]ng\s*tr[u\u00fa][:\s\/]*|place\s*of\s*residence[:\s\/]*|c[o\u00f3]\s*gi[a\u00e1]\s*tr\u1ecb\s*\u0111[e\u1ebf]n[:\s\/]*|date\s*of\s*expiry[:\s\/]*)\s*', '', clean, flags=re.IGNORECASE)
+        clean = re.sub(r'^(?:s[o\u1ed1]\s*[\/:]\s*no\.?|s[o\u1ed1]\s*[:\.\s]|no\.?[:\s]|h[o\u1ecd]\s*v[a\u00e0]\s*t[e\u00ea]n[:\s\/]*|full\s*name[:\s\/]*|ng[a\u00e0]y\s*sinh[:\s\/]*|date\s*of\s*birth[:\s\/]*|gi[o\u1edbi]\s*t[i\u00ed]nh[:\s\/]*|sex[:\s\/]*|qu[o\u00f4\u1ed1]c\s*t[i\u1ecb]ch[:\s\/]*|nationality[:\s\/]*|qu[e\u00ea]\s*qu[a\u00e1]n[:\s\/]*|place\s*of\s*origin[:\s\/]*|n[o\u01a1]i\s*th[u\u01b0\u1edd]ng\s*tr[u\u00fa][:\s\/]*|place\s*of\s*residence[:\s\/]*|c[o\u00f3]\s*gi[a\u00e1]\s*tr\u1ecb\s*\u0111[e\u1ebf]n[:\s\/]*|date\s*of\s*expiry[:\s\/]*)\s*', '', clean, flags=re.IGNORECASE)
+        
+        # Robust fallback for sticky labels without spaces/accents (e.g., Quequan/ Place oforigin)
+        if field_name == "placeOfOrigin":
+            clean_unaccented = remove_vietnamese_accents(clean).lower()
+            m = re.match(r'^(?:q\s*u\s*e\s*q\s*u\s*a\s*n\s*[\/\-:]*\s*p\s*l\s*a\s*c\s*e\s*o\s*f\s*o\s*r\s*i\s*g\s*i\s*n|q\s*u\s*e\s*q\s*u\s*a\s*n|p\s*l\s*a\s*c\s*e\s*o\s*f\s*o\s*r\s*i\s*g\s*i\s*n)[\s:\/\-]*', clean_unaccented)
+            if m:
+                clean = clean[m.end():]
+        elif field_name == "fullName":
+            clean_unaccented = remove_vietnamese_accents(clean).lower()
+            m = re.match(r'^(?:h\s*o\s*v\s*a\s*t\s*e\s*n\s*[\/\-:]*\s*f\s*u\s*l\s*l\s*n\s*a\s*m\s*e|h\s*o\s*v\s*a\s*t\s*e\s*n|f\s*u\s*l\s*l\s*n\s*a\s*m\s*e)[\s:\/\-]*', clean_unaccented)
+            if m:
+                clean = clean[m.end():]
+
         return clean.strip()
 
     def _find_keyword_lines(
@@ -237,8 +250,9 @@ class FieldExtractor:
         inline_text = self._strip_header_label(kw_line.text, "fullName")
         canonical_name, clean_name = normalize_full_name(inline_text)
 
+        clean_inline_for_noise = re.sub(r'[^a-z\s]', '', remove_vietnamese_accents(inline_text).lower())
         is_label_noise = any(
-            noise in remove_vietnamese_accents(inline_text).lower()
+            noise in clean_inline_for_noise
             for noise in ["chu dem", "chidem", "khai sinh", "khal sinh", "full name", "fuilname", "ho va ten"]
         )
 
@@ -261,19 +275,32 @@ class FieldExtractor:
         # Check next line
         if kw_idx + 1 < len(layout_lines):
             next_line = layout_lines[kw_idx + 1]
-            canonical_name, clean_name = normalize_full_name(next_line.text)
+            next_text = next_line.text
+            # Strip DOB and dates to prevent merging
+            next_text = re.sub(r'(?i)(ngay\s*sinh|date\s*of\s*birth|dob)[\/\s\.:]*', '', remove_vietnamese_accents(next_text))
+            next_text = re.sub(r'\d{1,2}[\/\.\-]\d{1,2}[\/\.\-]\d{2,4}', '', next_text)
+            
+            canonical_name, clean_name = normalize_full_name(next_text)
+            
             if canonical_name and len(canonical_name.split()) >= 2:
-                return ExtractedField(
-                    fieldName="fullName",
-                    value=canonical_name,
-                    rawText=clean_name or next_line.text,
-                    keyword=kw_str,
-                    language="VI/EN",
-                    confidence=next_line.confidence,
-                    bbox=self._compute_merged_bbox(next_line.tokens),
-                    label_box=self._compute_bbox_4(kw_line.tokens),
-                    value_box=self._compute_bbox_4(next_line.tokens)
+                # verify it's not noise
+                clean_inline_for_noise = re.sub(r'[^a-z\s]', '', remove_vietnamese_accents(next_text).lower())
+                is_label_noise = any(
+                    noise in clean_inline_for_noise
+                    for noise in ["chu dem", "chidem", "khai sinh", "khal sinh", "full name", "fuilname", "ho va ten"]
                 )
+                if not is_label_noise:
+                    return ExtractedField(
+                        fieldName="fullName",
+                        value=canonical_name,
+                        rawText=clean_name or next_text,
+                        keyword=kw_str,
+                        language="VI/EN",
+                        confidence=next_line.confidence,
+                        bbox=self._compute_merged_bbox(next_line.tokens),
+                        label_box=self._compute_bbox_4(kw_line.tokens),
+                        value_box=self._compute_bbox_4(next_line.tokens)
+                    )
 
         return None
 

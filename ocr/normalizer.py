@@ -218,7 +218,7 @@ def normalize_full_name(raw_name: Optional[str]) -> Tuple[Optional[str], Optiona
     if not norm:
         return None, None
 
-    clean = re.sub(r'^(?:h[o\u1ecd]\s*v[a\u00e0]\s*t[e\u00ean]|full\s*name|h[o\u1ecd]\s*t[e\u00ean])\s*[\/:]*\s*', '', norm, flags=re.IGNORECASE).strip()
+    clean = re.sub(r'^(?:h[o\u1ecd]\s*v[a\u00e0]\s*t[e\u00ea]n|full\s*name|h[o\u1ecd]\s*t[e\u00ea]n)\s*[\/:]*\s*', '', norm, flags=re.IGNORECASE).strip()
     clean = re.sub(r'[^a-zA-Z\u00C0-\u1EF9\s]', '', clean)
     clean = re.sub(r'\s+', ' ', clean).strip().upper()
 
